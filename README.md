@@ -60,4 +60,3 @@ NoteMD is being designed in the open. Ideas, accessibility feedback, workflow ex
 ## License
 
 NoteMD is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
-

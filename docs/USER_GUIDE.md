@@ -165,4 +165,3 @@ The MVP is intended to meet these targets on a typical work laptop:
 ## Getting help
 
 Until the application is implemented and published, use the future GitHub repository's issue tracker for product questions, workflow examples, documentation feedback, and accessibility concerns. Never attach confidential workplace documents or expose private file paths in a public issue.
-

@@ -36,4 +36,3 @@ fix(library): preserve projects after moving the library root
 ## Licensing contributions
 
 Unless explicitly stated otherwise, contributions intentionally submitted to NoteMD are licensed under the Apache License 2.0, as described in the repository's [LICENSE](LICENSE).
-
