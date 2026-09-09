@@ -382,6 +382,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "uuid",
+ "winapi-util",
 ]
 
 [[package]]

@@ -255,12 +255,13 @@ pub fn file_identity(path: &Path) -> Result<Option<String>, LibraryError> {
     let metadata = fs::metadata(path).map_err(LibraryError::io)?;
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        if let (Some(volume), Some(index)) =
-            (metadata.volume_serial_number(), metadata.file_index())
-        {
-            return Ok(Some(format!("win:{volume:x}:{index:x}")));
-        }
+        let handle = winapi_util::Handle::from_path_any(path).map_err(LibraryError::io)?;
+        let information = winapi_util::file::information(&handle).map_err(LibraryError::io)?;
+        return Ok(Some(format!(
+            "win:{:x}:{:x}",
+            information.volume_serial_number(),
+            information.file_index()
+        )));
     }
     #[cfg(unix)]
     {

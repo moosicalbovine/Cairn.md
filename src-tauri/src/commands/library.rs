@@ -11,9 +11,9 @@ use crate::infrastructure::filesystem::CandidateRootProbe;
 
 pub type LibraryState = Mutex<LibraryService>;
 
-fn service(
-    state: &State<'_, LibraryState>,
-) -> Result<MutexGuard<'_, LibraryService>, LibraryError> {
+fn service<'a>(
+    state: &'a State<'_, LibraryState>,
+) -> Result<MutexGuard<'a, LibraryService>, LibraryError> {
     state
         .lock()
         .map_err(|_| LibraryError::new("library_unavailable", "Library state lock was poisoned"))

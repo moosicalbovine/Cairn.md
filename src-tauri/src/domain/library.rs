@@ -680,7 +680,7 @@ impl LibraryService {
             let mut statement = database.connection().prepare(
                 "SELECT id, phase, payload_json, temporary_path, finalized_fingerprint FROM pending_file_operations ORDER BY created_at, id",
             ).map_err(LibraryError::database)?;
-            statement
+            let rows = statement
                 .query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -692,7 +692,8 @@ impl LibraryService {
                 })
                 .map_err(LibraryError::database)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(LibraryError::database)?
+                .map_err(LibraryError::database)?;
+            rows
         };
         for (id, phase_text, payload_json, temporary_path, expected_fingerprint) in operations {
             let phase = JournalPhase::parse(&phase_text)?;
@@ -1020,7 +1021,7 @@ fn load_existing_projects(
     let mut statement = transaction
         .prepare("SELECT id, path_key, file_identity FROM projects WHERE library_id = ?1")
         .map_err(LibraryError::database)?;
-    statement
+    let rows = statement
         .query_map([library_id], |row| {
             Ok(ExistingProject {
                 id: row.get(0)?,
@@ -1030,7 +1031,8 @@ fn load_existing_projects(
         })
         .map_err(LibraryError::database)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(LibraryError::database)
+        .map_err(LibraryError::database)?;
+    Ok(rows)
 }
 
 fn load_existing_documents(
@@ -1040,7 +1042,7 @@ fn load_existing_documents(
     let mut statement = transaction
         .prepare("SELECT id, path_key, file_identity FROM documents WHERE library_id = ?1")
         .map_err(LibraryError::database)?;
-    statement
+    let rows = statement
         .query_map([library_id], |row| {
             Ok(ExistingDocument {
                 id: row.get(0)?,
@@ -1050,7 +1052,8 @@ fn load_existing_documents(
         })
         .map_err(LibraryError::database)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(LibraryError::database)
+        .map_err(LibraryError::database)?;
+    Ok(rows)
 }
 
 fn unique_project_identity<'a>(
