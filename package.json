@@ -10,12 +10,21 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest",
+    "test:markdown": "vitest run src/features/editor/markdown/roundtrip.test.ts tests/e2e/editor-modes.spec.ts",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/state": "6.7.4",
+    "@milkdown/kit": "7.22.1",
+    "@milkdown/react": "7.22.1",
     "@tauri-apps/api": "2.11.1",
+    "codemirror": "6.0.2",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
