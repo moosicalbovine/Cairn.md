@@ -8,6 +8,8 @@ target/
 node_modules/
 .cache/
 .turbo/
+.eslintcache
+*.tsbuildinfo
 
 # Local environment and tools
 .env

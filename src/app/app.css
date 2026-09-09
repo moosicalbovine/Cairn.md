@@ -1,0 +1,176 @@
+:root {
+  color: #20231f;
+  background: #f2f4ee;
+  font-family:
+    "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell,
+.fatal-error {
+  min-height: 100vh;
+  padding: clamp(24px, 6vw, 72px);
+}
+
+.app-shell {
+  display: grid;
+  align-content: start;
+  gap: clamp(40px, 8vh, 88px);
+  background:
+    radial-gradient(circle at 8% 4%, rgb(201 218 168 / 55%), transparent 30rem),
+    #f2f4ee;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 12px;
+  color: #f7f8f2;
+  background: #263522;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: #687064;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.foundation-card {
+  max-width: 720px;
+  padding: clamp(28px, 5vw, 56px);
+  border: 1px solid rgb(38 53 34 / 14%);
+  border-radius: 24px;
+  background: rgb(255 255 252 / 82%);
+  box-shadow: 0 24px 70px rgb(38 53 34 / 10%);
+}
+
+.foundation-card h2 {
+  max-width: 14ch;
+  margin: 24px 0 18px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(36px, 6vw, 68px);
+  font-weight: 500;
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+}
+
+.foundation-card > p:last-child {
+  max-width: 56ch;
+  color: #535a50;
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  color: #39552d;
+  background: #e2ecd5;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.status-pill[data-state="unavailable"] {
+  color: #694d19;
+  background: #f6e9c8;
+}
+
+.fatal-error {
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  color: #3b2020;
+  background: #fff7f5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #eff1ea;
+    background: #151814;
+  }
+
+  .app-shell {
+    background:
+      radial-gradient(circle at 8% 4%, rgb(86 112 64 / 35%), transparent 30rem),
+      #151814;
+  }
+
+  .brand-mark {
+    color: #24301f;
+    background: #c9d8b8;
+  }
+
+  .eyebrow,
+  .foundation-card > p:last-child {
+    color: #acb4a8;
+  }
+
+  .foundation-card {
+    border-color: rgb(220 231 209 / 12%);
+    background: rgb(31 36 30 / 88%);
+    box-shadow: 0 24px 70px rgb(0 0 0 / 25%);
+  }
+
+  .status-pill {
+    color: #d7e6c5;
+    background: #31422c;
+  }
+
+  .status-pill[data-state="unavailable"] {
+    color: #f2d99e;
+    background: #4c3c1f;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

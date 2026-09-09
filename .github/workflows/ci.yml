@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, setup/project-foundation, feat/notemd-mvp]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Lint frontend
+        run: npm run lint
+      - name: Type-check frontend
+        run: npm run typecheck
+      - name: Test frontend
+        run: npm test -- --run
+      - name: Format Rust
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Lint Rust
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
+      - name: Build frontend
+        run: npm run build
+      - name: Build desktop application
+        run: npm run tauri build
