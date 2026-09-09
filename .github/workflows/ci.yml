@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, setup/project-foundation, feat/notemd-mvp]
+    branches: [main, setup/project-foundation, feat/cairn-md-mvp]
 
 permissions:
   contents: read
