@@ -16,7 +16,7 @@ pub struct HealthResponse {
 
 pub fn health_payload() -> HealthResponse {
     HealthResponse {
-        app: "NoteMD",
+        app: "Cairn.md",
         version: env!("CARGO_PKG_VERSION"),
         status: HealthStatus::Ok,
     }
@@ -43,10 +43,10 @@ pub fn run() {
                 .build(),
         )
         .setup(|_app| {
-            log::info!("NoteMD desktop core started");
+            log::info!("Cairn.md desktop core started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![health])
         .run(tauri::generate_context!())
-        .expect("NoteMD desktop core failed to start");
+        .expect("Cairn.md desktop core failed to start");
 }

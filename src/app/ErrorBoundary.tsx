@@ -12,15 +12,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(): void {
     // Never send exception values to logs: future editor errors may contain user text.
-    console.error("NoteMD view failed");
+    console.error("Cairn.md view failed");
   }
 
   public render(): ReactNode {
     if (this.state.failed) {
       return (
         <main className="fatal-error" role="alert">
-          <h1>NoteMD could not display this view</h1>
-          <p>Your Markdown files were not changed. Restart NoteMD to try again.</p>
+          <h1>Cairn.md could not display this view</h1>
+          <p>Your Markdown files were not changed. Restart Cairn.md to try again.</p>
         </main>
       );
     }

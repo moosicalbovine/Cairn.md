@@ -10,8 +10,8 @@ describe("health bridge", () => {
 
   it("accepts the narrow Rust health payload", () => {
     expect(
-      parseHealth({ app: "NoteMD", version: "0.1.0", status: "ok" }),
-    ).toEqual({ app: "NoteMD", version: "0.1.0", status: "ok" });
+      parseHealth({ app: "Cairn.md", version: "0.1.0", status: "ok" }),
+    ).toEqual({ app: "Cairn.md", version: "0.1.0", status: "ok" });
   });
 
   it("rejects malformed command responses", () => {
@@ -22,7 +22,7 @@ describe("health bridge", () => {
 
   it("invokes only the registered health command", async () => {
     vi.mocked(invoke).mockResolvedValue({
-      app: "NoteMD",
+      app: "Cairn.md",
       version: "0.1.0",
       status: "ok",
     });

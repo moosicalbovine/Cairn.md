@@ -1,17 +1,17 @@
-# NoteMD
+# Cairn.md
 
-NoteMD is a planned lightweight Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
+Cairn.md is a lightweight Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
 
 > [!IMPORTANT]
-> NoteMD is currently in the specification phase. There is no installable application yet.
+> Cairn.md is under active development at `v0.1.0`. There is no supported installer yet.
 
-## Why NoteMD?
+## Why Cairn.md?
 
 Markdown files increasingly arrive through email, Microsoft Teams, SharePoint folders, and AI tools. Native viewers make them easy to read once, but difficult to rediscover, organize, edit, and version later.
 
-NoteMD will provide a personal managed library that keeps Markdown files easy to find and work with while preserving clean, portable `.md` files.
+Cairn.md will provide a personal managed library that keeps Markdown files easy to find and work with while preserving clean, portable `.md` files.
 
-## Planned MVP
+## v0.1.0 — MVP (current)
 
 - Windows-first desktop experience
 - One user-selected, relocatable library folder
@@ -24,26 +24,28 @@ NoteMD will provide a personal managed library that keeps Markdown files easy to
 - Light, dark, and Follow Windows themes
 - Local-only operation with no required account or cloud service
 
-## Planned roadmap
+## SemVer roadmap
 
-### Version 2
+### v0.2.0
 
 - Nested sub-projects
-- One local Git repository per top-level project
-- Manual named versions and automatic recovery checkpoints
-- A minimal Git status of committed or uncommitted changes with a short commit hash
-
-### Version 3
-
 - User-defined tags
 - Fuzzy search across filenames and metadata
 - Ranked full-text content search
 - Metadata filters and organized search views
 
+### v1.0.0 — first public announcement
+
+- One local Git repository per top-level project
+- Manual named versions and automatic recovery checkpoints
+- A minimal Git status of committed or uncommitted changes with a short commit hash
+- Navigation through older committed versions of a document
+- Read-only historical viewing and current-to-history diffs
+
 ## Product principles
 
 - **Local by default:** documents and application metadata remain on the user's PC.
-- **Portable Markdown:** NoteMD never requires proprietary syntax inside `.md` files.
+- **Portable Markdown:** Cairn.md never requires proprietary syntax inside `.md` files.
 - **Safe imports:** importing always creates an independent library copy and never edits the tracked original.
 - **Fast and dependable:** startup, typing, autosave, and recovery are treated as core product requirements.
 - **Simple versioning:** Git powers local history without exposing developer-oriented workflows.
@@ -55,8 +57,8 @@ NoteMD will provide a personal managed library that keeps Markdown files easy to
 
 ## Contributing
 
-NoteMD is being designed in the open. Ideas, accessibility feedback, workflow examples, and future code contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
+Cairn.md is being built in the open. Ideas, accessibility feedback, workflow examples, and code contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
 
 ## License
 
-NoteMD is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
+Cairn.md is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.

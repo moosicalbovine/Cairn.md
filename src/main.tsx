@@ -7,7 +7,7 @@ import { ErrorBoundary } from "./app/ErrorBoundary";
 const root = document.getElementById("root");
 
 if (!root) {
-  throw new Error("NoteMD root element is missing");
+  throw new Error("Cairn.md root element is missing");
 }
 
 createRoot(root).render(

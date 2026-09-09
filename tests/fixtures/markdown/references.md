@@ -1,6 +1,6 @@
-[portable reference][notemd]
+[portable reference][cairn-md]
 
 ![reference image][logo]
 
-[notemd]: https://example.com "Reference title"
+[cairn-md]: https://example.com "Reference title"
 [logo]: https://example.com/logo.png

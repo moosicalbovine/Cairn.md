@@ -1,8 +1,8 @@
 ---
-title: NoteMD Product Scope - Plan
+title: Cairn.md Product Scope - Plan
 type: feat
 date: 2026-09-08
-topic: notemd-product-scope
+topic: cairn-md-product-scope
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
@@ -10,14 +10,14 @@ execution: code
 deepened: 2026-09-08
 ---
 
-# NoteMD Product Scope - Plan
+# Cairn.md Product Scope - Plan
 
 ## Goal Capsule
 
 - **Objective:** Give Windows knowledge workers a fast, dependable place to collect, organize, read, and edit Markdown documents that would otherwise remain scattered across local downloads and workplace tools.
 - **Means:** Build a Tauri 2 desktop application with a Rust core and a TypeScript editor interface over the Windows WebView2 runtime (KTD1).
 - **Product authority:** The Product Contract owns user-visible behavior. Key Technical Decisions own implementation mechanisms. Implementation Units may not weaken either contract.
-- **Product Contract preservation:** Changed only to add the user-directed Version 3 history and diff roadmap feature. MVP requirements R1-R30 are unchanged.
+- **Product Contract preservation:** Amended to adopt the Cairn.md product name and express the release sequence as SemVer: `v0.1.0`, `v0.2.0`, and public launch `v1.0.0`. MVP requirements R1-R30 are unchanged.
 - **Execution profile:** Execute the units in the dependency order shown in Sequencing. Keep each unit independently reviewable.
 - **Stop conditions:** Stop and return to planning if the Markdown corpus cannot preserve unsupported syntax through a no-op Visual-mode round trip, or if a user-content mutation cannot be constrained to the selected library root.
 - **Tail ownership:** Implementation includes source, tests, documentation, CI, and a locally buildable unsigned installer. Publishing a GitHub release and production code signing require the repository owner’s credentials and explicit release action.
@@ -29,7 +29,7 @@ deepened: 2026-09-08
 
 ### Summary
 
-NoteMD is a Windows-first desktop application for managing a personal library of portable Markdown documents.
+Cairn.md is a Windows-first desktop application for managing a personal library of portable Markdown documents.
 Its MVP combines copy-based import, top-level project organization, direct visual editing, source editing, autosave, and light or dark reading in one local workspace.
 
 ### Problem Frame
@@ -50,19 +50,18 @@ Opening files in unrelated editors fragments the workflow further and makes a gr
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
 
-This plan owns the NoteMD MVP as one coherent work unit.
+This plan owns the Cairn.md `v0.1.0` MVP as one coherent work unit.
 The broader breakdown below is the current product direction rather than a committed roadmap.
 
-- **Version 2 depends on the MVP project and document model.** It adds nested subprojects and one local Git repository per top-level project.
-  - Git history spans the top-level project and all of its subprojects.
-  - Autosave remains separate from Git commits.
-  - Users create manual named versions, while NoteMD may create automatic recovery checkpoints.
-  - The visible Git state is limited to `Committed · <short hash>` or `Uncommitted changes · <short hash>`.
-  - Branches, staging, remotes, merge states, and ahead or behind states are not exposed.
-- **Version 3 depends on the MVP metadata and the Version 2 hierarchy and Git model.** It adds tags, fuzzy metadata search, ranked full-text search, filters, saved organized views, and document history navigation.
+- **v0.2.0 depends on the v0.1.0 project, document, and metadata model.** It adds nested subprojects, tags, fuzzy metadata search, ranked full-text search, filters, and saved organized views.
   - Tags support retrieval and views only and never alter Markdown content.
   - Fuzzy matching applies to metadata such as filenames, titles, tags, project names, and paths rather than every content word.
   - Full-text results use ranked matching with contextual snippets.
+- **v1.0.0 is the first publicly announced release and depends on the v0.2.0 hierarchy.** It adds one local Git repository per top-level project, manual named versions, automatic recovery checkpoints, minimal Git state, and document history navigation.
+  - Git history spans the top-level project and all of its subprojects.
+  - Autosave remains separate from Git commits.
+  - The visible Git state is limited to `Committed · <short hash>` or `Uncommitted changes · <short hash>`.
+  - Branches, staging, remotes, merge states, and ahead or behind states are not exposed.
   - A document history view lists older committed versions of the selected `.md` file.
   - The user can open an older version read-only and compare it with the current document in a readable diff view.
 
@@ -76,20 +75,20 @@ The broader breakdown below is the current product direction rather than a commi
 
 **Platform and library**
 
-- R1. NoteMD must run as a Windows-first desktop application without requiring an account, internet connection, or cloud service for its core workflow.
-- R2. The user must select one writable folder as the active NoteMD library root.
-- R3. NoteMD must store internal project and document references relative to the active library root so the whole library can be moved and relinked.
+- R1. Cairn.md must run as a Windows-first desktop application without requiring an account, internet connection, or cloud service for its core workflow.
+- R2. The user must select one writable folder as the active Cairn.md library root.
+- R3. Cairn.md must store internal project and document references relative to the active library root so the whole library can be moved and relinked.
 - R4. The MVP must organize documents into top-level projects and must not expose nested subprojects.
 - R5. The library workspace must let the user create and rename top-level projects and create, rename, move, or delete documents.
-- R6. NoteMD must rescan and reconcile files or folders moved or renamed within the library root without creating duplicate library entries.
+- R6. Cairn.md must rescan and reconcile files or folders moved or renamed within the library root without creating duplicate library entries.
 
 **Import and provenance**
 
 - R7. The MVP must import `.md` files through a file picker, drag and drop, or the Tracked PC Folders section.
 - R8. Tracked PC Folders must be a collapsible, import-only view of user-selected folders and must never modify source files.
 - R9. Every import must create an independent copy inside the selected top-level project, even when the same source was imported before.
-- R10. When an imported filename already exists at the destination, NoteMD must preserve both documents by assigning the new copy the smallest available numbered name such as `proposal (2).md`.
-- R11. NoteMD must keep the original absolute source path, import date and time, and current library-relative path in app-owned metadata rather than writing them into the Markdown file.
+- R10. When an imported filename already exists at the destination, Cairn.md must preserve both documents by assigning the new copy the smallest available numbered name such as `proposal (2).md`.
+- R11. Cairn.md must keep the original absolute source path, import date and time, and current library-relative path in app-owned metadata rather than writing them into the Markdown file.
 - R12. After a successful import, the library copy must remain usable when the original file is moved, changed, or removed.
 
 **Workspace and editing**
@@ -99,7 +98,7 @@ The broader breakdown below is the current product direction rather than a commi
 - R15. Visual mode must provide discoverable controls and standard keyboard shortcuts for common Markdown formatting, including headings, emphasis, links, lists, task lists, quotes, code, and tables.
 - R16. Source mode must edit the same underlying Markdown file and act as the fallback for syntax that is difficult or ambiguous to edit visually.
 - R17. The MVP must not include separate Preview or Split modes.
-- R18. NoteMD must read and write CommonMark plus GitHub Flavored Markdown without adding proprietary document syntax.
+- R18. Cairn.md must read and write CommonMark plus GitHub Flavored Markdown without adding proprietary document syntax.
 - R19. Switching between Visual and Source modes must preserve unsupported or ambiguous Markdown syntax without content loss.
 - R20. The user must be able to select Light, Dark, or Follow Windows appearance while reading or editing.
 
@@ -108,7 +107,7 @@ The workspace relationship is:
 ```mermaid
 flowchart LR
   Sources[Local files and tracked folders] -->|Import copy| LibraryRoot[(Selected library root)]
-  subgraph Workspace[NoteMD workspace]
+  subgraph Workspace[Cairn.md workspace]
     LibraryPane[Library pane<br/>Projects and tracked folders]
     ContentPane[Contents pane<br/>Documents in selected project]
     EditorPane[Editor pane<br/>Visual or Source mode]
@@ -120,40 +119,40 @@ flowchart LR
 
 **Saving and recovery**
 
-- R21. NoteMD must autosave every document edit without requiring or presenting a normal manual-save workflow.
+- R21. Cairn.md must autosave every document edit without requiring or presenting a normal manual-save workflow.
 - R22. The save indicator must use only `Saving…`, `Saved`, `Save failed`, or `Recovered` as user-facing persistence states in the MVP.
-- R23. If a save fails, NoteMD must retain the user's latest recoverable content and provide a clear retry path.
-- R24. After forced termination, NoteMD must recover all but at most two seconds of acknowledged editing work.
+- R23. If a save fails, Cairn.md must retain the user's latest recoverable content and provide a clear retry path.
+- R24. After forced termination, Cairn.md must recover all but at most two seconds of acknowledged editing work.
 
 **Performance and reliability**
 
-- R25. NoteMD must reach an interactive library workspace within 1.5 seconds of a cold launch on the agreed reference Windows work laptop.
+- R25. Cairn.md must reach an interactive library workspace within 1.5 seconds of a cold launch on the agreed reference Windows work laptop.
 - R26. Editor input must respond within 50 milliseconds during normal editing.
 - R27. A normal Markdown document must open for interaction within 250 milliseconds.
-- R28. NoteMD must use less than 150 MB of memory while idle with a library open.
+- R28. Cairn.md must use less than 150 MB of memory while idle with a library open.
 - R29. Autosave, import, project management, editor mode switching, and theme switching must not visibly interrupt typing.
 - R30. Normal import, editing, theme switching, and project management must not crash the application or corrupt Markdown content.
 
 ### Key Flows
 
 - F1. **Create or open a library**
-  - **Trigger:** A1 starts NoteMD without an available active library or chooses to relocate the library.
-  - **Steps:** A1 selects the library root; NoteMD validates write access; NoteMD loads relative project and document references; NoteMD presents the workspace.
+  - **Trigger:** A1 starts Cairn.md without an available active library or chooses to relocate the library.
+  - **Steps:** A1 selects the library root; Cairn.md validates write access; Cairn.md loads relative project and document references; Cairn.md presents the workspace.
   - **Outcome:** The user can resume work from the selected library location.
   - **Covers R1, R2, R3, R4, R6.**
 - F2. **Import a Markdown document**
   - **Trigger:** A1 chooses a file, drops a file into a project, or selects a file from A3 through Tracked PC Folders.
-  - **Steps:** A1 selects a destination project; NoteMD copies the file; NoteMD resolves any filename collision; NoteMD records provenance; NoteMD opens or selects the library copy.
+  - **Steps:** A1 selects a destination project; Cairn.md copies the file; Cairn.md resolves any filename collision; Cairn.md records provenance; Cairn.md opens or selects the library copy.
   - **Outcome:** A new independent Markdown document is available in the project.
   - **Covers R7, R8, R9, R10, R11, R12.**
 - F3. **Read and edit a document**
   - **Trigger:** A1 selects a document from the contents pane.
-  - **Steps:** NoteMD opens it in Visual mode; A1 edits rendered content or switches to Source mode; A1 may select Light, Dark, or Follow Windows without interrupting the active edit; NoteMD autosaves changes; the persistence indicator reflects the result.
+  - **Steps:** Cairn.md opens it in Visual mode; A1 edits rendered content or switches to Source mode; A1 may select Light, Dark, or Follow Windows without interrupting the active edit; Cairn.md autosaves changes; the persistence indicator reflects the result.
   - **Outcome:** The portable `.md` file contains the latest saved content while the document list remains available for reference.
   - **Covers R13, R14, R15, R16, R17, R18, R19, R20, R21, R22.**
 - F4. **Recover from an interrupted save**
-  - **Trigger:** NoteMD cannot complete a save or terminates unexpectedly during editing.
-  - **Steps:** NoteMD retains recoverable content; on restart it restores the latest valid state; NoteMD identifies the restored state as `Recovered` or presents a retry after `Save failed`.
+  - **Trigger:** Cairn.md cannot complete a save or terminates unexpectedly during editing.
+  - **Steps:** Cairn.md retains recoverable content; on restart it restores the latest valid state; Cairn.md identifies the restored state as `Recovered` or presents a retry after `Save failed`.
   - **Outcome:** A1 can continue without silent data loss.
   - **Covers R23, R24, R30.**
 
@@ -168,7 +167,7 @@ flowchart LR
   - **Covers R10.**
   - **Given:** A project contains `proposal.md` and `proposal (2).md`.
   - **When:** A1 imports another file named `proposal.md` into that project.
-  - **Then:** NoteMD creates `proposal (3).md` without overwriting either existing document.
+  - **Then:** Cairn.md creates `proposal (3).md` without overwriting either existing document.
 - AE3. **Working from a tracked folder**
   - **Covers R7, R8, R12.**
   - **Given:** A1 has added a folder to Tracked PC Folders.
@@ -177,7 +176,7 @@ flowchart LR
 - AE4. **Relocating the library**
   - **Covers R3, R6.**
   - **Given:** A1 moves the complete library root to another local drive.
-  - **When:** A1 selects the new root location in NoteMD.
+  - **When:** A1 selects the new root location in Cairn.md.
   - **Then:** Existing projects, documents, and app metadata resolve from relative references without manual repair of each item.
 - AE5. **Preserving complex Markdown**
   - **Covers R16, R18, R19.**
@@ -187,15 +186,15 @@ flowchart LR
 - AE6. **Recovering after forced termination**
   - **Covers R21, R22, R23, R24.**
   - **Given:** A1 is typing while autosave is active.
-  - **When:** The process is forcibly terminated and NoteMD is restarted.
-  - **Then:** NoteMD restores all but at most the final two seconds of acknowledged editing work and labels the restoration `Recovered`.
+  - **When:** The process is forcibly terminated and Cairn.md is restarted.
+  - **Then:** Cairn.md restores all but at most the final two seconds of acknowledged editing work and labels the restoration `Recovered`.
 
 ### Scope Boundaries
 
 **Deferred for later**
 
-- Nested subprojects and the local Git experience are Version 2 candidates described in How This Work Fits Together.
-- Tags, search, saved views, per-document history navigation, historical read-only viewing, and current-to-history diffs are Version 3 candidates described in How This Work Fits Together.
+- Nested subprojects, tags, search, and saved views are `v0.2.0` candidates described in How This Work Fits Together.
+- Local Git, named versions, per-document history navigation, historical read-only viewing, and current-to-history diffs are `v1.0.0` candidates described in How This Work Fits Together.
 
 **Outside this product's initial identity**
 
@@ -220,7 +219,7 @@ flowchart LR
 ### Key Technical Decisions
 
 - KTD1. Use Tauri 2 for the desktop shell, Rust for trusted operating-system work, and React with TypeScript and Vite for the WebView2 interface. (session-settled: user-approved — chosen over native WinUI and Electron: the web editor ecosystem supports Markdown-first visual editing in one UI stack while Tauri avoids bundling a browser runtime.) Governs R1, R13-R20, R25-R30.
-- KTD2. Store canonical user content as `.md` files below the selected library root. Each MVP project is one direct child directory and each managed document is one direct `.md` child of its project. Store library identity, binding generation, settings, provenance, relative-path indexes, and recovery snapshots in a `rusqlite` database below `%LOCALAPPDATA%\NoteMD`. An explicit relink operation validates a candidate root, shows a match summary, and requires confirmation before replacing the previous binding; project and document paths remain relative to the bound root. Governs R2-R6, R11, R23, R24.
+- KTD2. Store canonical user content as `.md` files below the selected library root. Each MVP project is one direct child directory and each managed document is one direct `.md` child of its project. Store library identity, binding generation, settings, provenance, relative-path indexes, and recovery snapshots in a `rusqlite` database below `%LOCALAPPDATA%\Cairn.md`. An explicit relink operation validates a candidate root, shows a match summary, and requires confirmation before replacing the previous binding; project and document paths remain relative to the bound root. Governs R2-R6, R11, R23, R24.
 - KTD3. Keep the exact Markdown source string canonical. Use Milkdown 7 with CommonMark and GFM presets as a Visual-mode projection and CodeMirror 6 for Source mode. Parsed nodes retain source ranges, and Visual-mode transactions produce localized source patches instead of serializing the full editor tree. Unsupported syntax remains in source-backed blocks; Source-mode edits replace the canonical string and rebuild all mappings. (session-settled: user-approved — chosen over rejecting the whole document or normalizing unknown syntax: source-backed blocks preserve portable Markdown without hiding the rest of the visual editor.) Governs R14-R19.
 - KTD4. Route file picker, drag-and-drop, and Tracked PC Folder imports through one Rust import service. Copy through an operation-owned same-directory temporary file and compare the source identity and fingerprint before and after the copy. Finalize with no-overwrite semantics, retry collision allocation if the target appears concurrently, and commit provenance only after the destination is durable and verified. Governs R7-R12, R29, R30.
 - KTD5. Use `current_revision`, `durable_snapshot_revision`, and `disk_revision` in one serial document queue. Treat an edit as acknowledged when the UI assigns `current_revision` and queues recovery. Advance `durable_snapshot_revision` at least once per second and before releasing a document session; coalesce newer work while one disk write is in flight. Mark `Saved` only when `disk_revision` equals `current_revision`, and clear a snapshot only after its intended content hash matches disk. Governs R21-R24, R29, R30.
@@ -334,7 +333,7 @@ stateDiagram-v2
 - The library scan is authoritative. Watcher events only schedule scans.
 - The database enforces a case-folded unique key for each library-relative path.
 - A rename is matched under KTD7. Ambiguous candidates are never merged automatically.
-- A NoteMD replacement records the new file identity and fingerprint through KTD11 before self-generated watcher events are released.
+- A Cairn.md replacement records the new file identity and fingerprint through KTD11 before self-generated watcher events are released.
 - A whole-library relocation changes only the root binding because indexed paths remain relative.
 - Document deletion uses the Windows Recycle Bin. Metadata changes only after the recoverable filesystem operation succeeds.
 - The scanner manages only `root/<project>/<document>.md`. It ignores unexpected nested directories, root-level files, operation-owned temporary files, dot-prefixed control directories, and future `.git` directories without deleting them.
@@ -344,7 +343,7 @@ stateDiagram-v2
 - Local relative images render only when their resolved path remains inside the library root.
 - Remote images do not load automatically in the MVP.
 - External links open through the Windows default browser only after a user action.
-- The WebView uses a restrictive content security policy and cannot navigate to arbitrary pages inside the NoteMD window.
+- The WebView uses a restrictive content security policy and cannot navigate to arbitrary pages inside the Cairn.md window.
 
 ### Data Model
 
@@ -378,7 +377,7 @@ Startup may advance a phase only when the recorded pre-state, post-state, owners
 ### Project Structure
 
 ```text
-NoteMD/
+Cairn.md/
 ├── package.json
 ├── package-lock.json
 ├── vite.config.ts
@@ -430,8 +429,8 @@ U1 must prove a thin Rust-to-WebView command and collect baseline startup and me
 - The Rust command boundary is the only path from UI intent to disk mutation.
 - All three import entry points produce the same collision, provenance, and rollback behavior.
 - The canonical Markdown string is the only editable document representation. Visual and Source modes are projections of that value.
-- User content and app metadata have separate backup and lifecycle behavior. Removing NoteMD must not remove the selected library.
-- A single-instance guard prevents concurrent NoteMD processes from writing the same active library. External tools remain supported through KTD6.
+- User content and app metadata have separate backup and lifecycle behavior. Removing Cairn.md must not remove the selected library.
+- A single-instance guard prevents concurrent Cairn.md processes from writing the same active library. External tools remain supported through KTD6.
 - Logging excludes Markdown content and absolute source paths by default. Diagnostics may include operation IDs, relative paths, durations, and error classes.
 
 **Data-integrity invariants**
@@ -458,7 +457,7 @@ U1 must prove a thin Rust-to-WebView command and collect baseline startup and me
 ### Alternatives Considered
 
 - **Native WinUI 3 shell:** WinUI gives the strongest Windows-native controls, accessibility defaults, and platform integration. Its `RichEditBox` is RTF-oriented rather than Markdown-native, so a comparable visual Markdown editor would require substantial custom parsing and editing work or an embedded WebView2 editor. That hybrid would add a second UI stack without removing the browser runtime. Reconsider WinUI only if a validated accessibility or enterprise-deployment requirement cannot be met in Tauri.
-- **Electron:** Electron offers a mature desktop ecosystem and consistent Chromium behavior. It bundles Chromium and Node.js, which conflicts with the installer-size and idle-memory goals before NoteMD adds product code.
+- **Electron:** Electron offers a mature desktop ecosystem and consistent Chromium behavior. It bundles Chromium and Node.js, which conflicts with the installer-size and idle-memory goals before Cairn.md adds product code.
 - **Tiptap Markdown:** Tiptap has a capable editor ecosystem, but its official Markdown extension is marked Beta and documents unsupported and lossy cases. Milkdown is the safer Markdown-first starting point for R18 and R19.
 - **Metadata inside the library root:** This would make the library self-contained, but it would also expose private provenance and place an open SQLite database inside folders that users may sync through OneDrive or SharePoint. A LocalAppData database plus relative references keeps the Markdown library portable without those risks.
 - **Bundled fixed WebView2 runtime:** It enables a fully offline first install but adds roughly 180 MB to distribution. KTD9 keeps the core application offline after install while retaining a small installer.
@@ -596,18 +595,18 @@ The implementation creates the scripts named below. A unit-level reference to V5
 
 ### Measurement Rules
 
-- Use a release build for V7. Record the Windows version, CPU, RAM, storage, WebView2 version, and NoteMD commit.
+- Use a release build for V7. Record the Windows version, CPU, RAM, storage, WebView2 version, and Cairn.md commit.
 - Use at least 20 independent samples for each latency metric. Discard only documented harness failures, never slow valid samples.
-- Measure cold start from process creation until the library and editor can accept input. Close NoteMD and allow the harness to reset between samples.
+- Measure cold start from process creation until the library and editor can accept input. Close Cairn.md and allow the harness to reset between samples.
 - Measure input latency from the input event timestamp through the first painted frame that displays the edit.
-- Measure idle memory as the NoteMD process-tree working set after a library and one normal document have been open without input for 60 seconds.
+- Measure idle memory as the Cairn.md process-tree working set after a library and one normal document have been open without input for 60 seconds.
 - Preserve raw results as CI artifacts and summarize them in `docs/PERFORMANCE.md`.
 
 ---
 
 ## Definition of Done
 
-NoteMD MVP is done when all of the following are true:
+Cairn.md `v0.1.0` is done when all of the following are true:
 
 - U1-U8 meet their goals and their named tests exist at the planned paths.
 - R1-R30 and AE1-AE6 are covered by automated tests or an explicit installer checklist item.

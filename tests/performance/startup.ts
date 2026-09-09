@@ -11,9 +11,9 @@ const startupTimeoutMs = 10_000;
 
 function readProcessSample(processId: number): ProcessSample | undefined {
   const script = [
-    `$notemdProcess = Get-Process -Id ${processId} -ErrorAction SilentlyContinue`,
-    "if ($null -eq $notemdProcess) { exit 2 }",
-    "@{ mainWindowHandle = $notemdProcess.MainWindowHandle.ToInt64(); workingSetBytes = $notemdProcess.WorkingSet64 } | ConvertTo-Json -Compress",
+    `$cairnProcess = Get-Process -Id ${processId} -ErrorAction SilentlyContinue`,
+    "if ($null -eq $cairnProcess) { exit 2 }",
+    "@{ mainWindowHandle = $cairnProcess.MainWindowHandle.ToInt64(); workingSetBytes = $cairnProcess.WorkingSet64 } | ConvertTo-Json -Compress",
   ].join("; ");
 
   const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
@@ -52,7 +52,7 @@ async function measure(binaryPath: string): Promise<void> {
   });
 
   if (child.pid === undefined) {
-    throw new Error("NoteMD process did not start");
+    throw new Error("Cairn.md process did not start");
   }
 
   try {
@@ -74,7 +74,7 @@ async function measure(binaryPath: string): Promise<void> {
       await delay(pollIntervalMs);
     }
 
-    throw new Error("NoteMD did not create its main window within 10 seconds");
+    throw new Error("Cairn.md did not create its main window within 10 seconds");
   } finally {
     child.kill();
   }
@@ -82,7 +82,7 @@ async function measure(binaryPath: string): Promise<void> {
 
 const binaryPath = process.argv[2];
 if (!binaryPath) {
-  throw new Error("Usage: node tests/performance/startup.ts <notemd.exe>");
+  throw new Error("Usage: node tests/performance/startup.ts <cairn-md.exe>");
 }
 
 await measure(binaryPath);

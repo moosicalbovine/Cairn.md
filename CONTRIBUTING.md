@@ -1,10 +1,10 @@
-# Contributing to NoteMD
+# Contributing to Cairn.md
 
 Thank you for helping make local Markdown work easier and safer.
 
 ## Project status
 
-NoteMD is currently in the specification phase. Until an implementation plan is accepted, contributions are most useful when they improve requirements, accessibility, workflows, or documentation.
+Cairn.md is under active `v0.1.0` development. Contributions are most useful when they improve implementation quality, tests, requirements, accessibility, workflows, or documentation.
 
 ## Ways to contribute
 
@@ -35,4 +35,4 @@ fix(library): preserve projects after moving the library root
 
 ## Licensing contributions
 
-Unless explicitly stated otherwise, contributions intentionally submitted to NoteMD are licensed under the Apache License 2.0, as described in the repository's [LICENSE](LICENSE).
+Unless explicitly stated otherwise, contributions intentionally submitted to Cairn.md are licensed under the Apache License 2.0, as described in the repository's [LICENSE](LICENSE).

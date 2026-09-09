@@ -29,7 +29,7 @@ export function App() {
         </div>
         <div>
           <p className="eyebrow">Local Markdown workspace</p>
-          <h1>NoteMD</h1>
+          <h1>Cairn.md</h1>
         </div>
       </header>
 
@@ -37,11 +37,11 @@ export function App() {
         <p className="status-pill" data-state={connection}>
           {connection === "checking" && "Starting locally…"}
           {connection === "ready" && "Desktop core ready"}
-          {connection === "unavailable" && "Open with the NoteMD desktop app"}
+          {connection === "unavailable" && "Open with the Cairn.md desktop app"}
         </p>
         <h2 id="foundation-heading">Your Markdown library is taking shape.</h2>
         <p>
-          NoteMD runs on your PC and keeps portable Markdown files under your
+          Cairn.md runs on your PC and keeps portable Markdown files under your
           control. Library setup arrives in the next implementation unit.
         </p>
       </section>

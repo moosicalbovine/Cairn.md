@@ -18,7 +18,7 @@ describe("ErrorBoundary", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "NoteMD could not display this view",
+      "Cairn.md could not display this view",
     );
     expect(screen.queryByText(/sensitive document text/i)).not.toBeInTheDocument();
   });

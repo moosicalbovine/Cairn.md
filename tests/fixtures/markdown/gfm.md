@@ -2,7 +2,7 @@
 
 | Name | Ready |
 | --- | --- |
-| NoteMD | yes |
+| Cairn.md | yes |
 
 - [x] Preserve source
 - [ ] Avoid proprietary syntax

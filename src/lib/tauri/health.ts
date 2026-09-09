@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type HealthResponse = Readonly<{
-  app: "NoteMD";
+  app: "Cairn.md";
   version: string;
   status: "ok";
 }>;
@@ -18,7 +18,7 @@ export function parseHealth(value: unknown): HealthResponse {
   const keys = Object.keys(value).sort();
   const hasExpectedShape =
     keys.join(",") === "app,status,version" &&
-    value.app === "NoteMD" &&
+    value.app === "Cairn.md" &&
     typeof value.version === "string" &&
     value.version.length > 0 &&
     value.status === "ok";
