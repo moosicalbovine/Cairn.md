@@ -1,0 +1,129 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use rusqlite::{Connection, OpenFlags};
+
+use crate::domain::library::LibraryError;
+
+const MIGRATION_0001: &str = include_str!("../../migrations/0001_library.sql");
+
+pub const DATABASE_FILENAME: &str = "library.sqlite3";
+
+pub enum DatabaseOpen {
+    Healthy(Database),
+    Damaged { path: PathBuf, reason: String },
+}
+
+pub struct Database {
+    connection: Connection,
+    path: PathBuf,
+}
+
+impl Database {
+    pub fn open(app_data_dir: &Path) -> Result<DatabaseOpen, LibraryError> {
+        fs::create_dir_all(app_data_dir).map_err(LibraryError::io)?;
+        let path = app_data_dir.join(DATABASE_FILENAME);
+        let existed_with_data = fs::metadata(&path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let mut connection = match Connection::open_with_flags(&path, flags) {
+            Ok(connection) => connection,
+            Err(error) if existed_with_data => {
+                return Ok(DatabaseOpen::Damaged {
+                    path,
+                    reason: error.to_string(),
+                });
+            }
+            Err(error) => return Err(LibraryError::database(error)),
+        };
+
+        if let Err(error) = configure(&connection) {
+            if existed_with_data {
+                return Ok(DatabaseOpen::Damaged {
+                    path,
+                    reason: error.to_string(),
+                });
+            }
+            return Err(LibraryError::database(error));
+        }
+
+        if existed_with_data {
+            match integrity_check(&connection) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Ok(DatabaseOpen::Damaged {
+                        path,
+                        reason: "SQLite integrity_check failed".to_owned(),
+                    });
+                }
+                Err(error) => {
+                    return Ok(DatabaseOpen::Damaged {
+                        path,
+                        reason: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(LibraryError::database)?;
+        if version > 1 {
+            return Ok(DatabaseOpen::Damaged {
+                path,
+                reason: format!("Unsupported metadata schema version {version}"),
+            });
+        }
+        if version < 1 {
+            let transaction = connection.transaction().map_err(LibraryError::database)?;
+            if let Err(error) = transaction.execute_batch(MIGRATION_0001) {
+                return if existed_with_data {
+                    Ok(DatabaseOpen::Damaged {
+                        path,
+                        reason: format!("Metadata migration failed: {error}"),
+                    })
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            transaction.commit().map_err(LibraryError::database)?;
+        }
+
+        if !integrity_check(&connection).map_err(LibraryError::database)? {
+            return Ok(DatabaseOpen::Damaged {
+                path,
+                reason: "SQLite integrity_check failed after migration".to_owned(),
+            });
+        }
+
+        Ok(DatabaseOpen::Healthy(Self { connection, path }))
+    }
+
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    pub(crate) fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn configure(connection: &Connection) -> rusqlite::Result<()> {
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(())
+}
+
+fn integrity_check(connection: &Connection) -> rusqlite::Result<bool> {
+    let result: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(result == "ok")
+}

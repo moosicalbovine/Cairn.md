@@ -1,6 +1,13 @@
 use serde::Serialize;
 use tauri::Manager;
 
+pub mod commands;
+pub mod domain;
+pub mod infrastructure;
+
+use commands::library::LibraryState;
+use domain::library::LibraryService;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
@@ -42,11 +49,29 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
-        .setup(|_app| {
+        .setup(|app| {
+            let app_data_dir = app.path().app_local_data_dir()?;
+            let library = LibraryService::open(&app_data_dir)?;
+            app.manage(LibraryState::new(library));
             log::info!("Cairn.md desktop core started");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health])
+        .invoke_handler(tauri::generate_handler![
+            health,
+            commands::library::probe_library_root,
+            commands::library::bind_library_root,
+            commands::library::preview_library_relink,
+            commands::library::confirm_library_relink,
+            commands::library::library_snapshot,
+            commands::library::reconcile_library,
+            commands::library::reconcile_library_if_requested,
+            commands::library::create_project,
+            commands::library::rename_project,
+            commands::library::create_document,
+            commands::library::rename_document,
+            commands::library::move_document,
+            commands::library::delete_document,
+        ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");
 }
