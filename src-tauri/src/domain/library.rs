@@ -482,9 +482,8 @@ impl LibraryService {
     }
 
     pub fn create_project(&mut self, name: &str) -> Result<ProjectSnapshot, LibraryError> {
-        self.require_writable()?;
+        let binding = self.required_writable_binding()?;
         let name = validate_project_name(name)?;
-        let binding = self.required_binding()?;
         self.ensure_project_path_available(&binding.library_id, &name, None)?;
         let target = resolve_new(&binding.root_path, &name)?;
         let id = Uuid::new_v4().to_string();
@@ -501,6 +500,7 @@ impl LibraryService {
             None,
             None,
         )?;
+        self.verify_active_root(&binding)?;
         fs::create_dir(&target).map_err(map_conflict_io)?;
         sync_parent(&target)?;
         self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
@@ -519,12 +519,11 @@ impl LibraryService {
         project_id: &str,
         name: &str,
     ) -> Result<ProjectSnapshot, LibraryError> {
-        self.require_writable()?;
+        let binding = self.required_writable_binding()?;
         let name = validate_project_name(name)?;
-        let binding = self.required_binding()?;
         let project = self.project_by_id(project_id)?;
         self.ensure_project_path_available(&binding.library_id, &name, Some(project_id))?;
-        let source = resolve_existing(&binding.root_path, &project.relative_path)?;
+        let source = self.verified_project_path(&binding, project_id, &project.relative_path)?;
         validate_relative_path(&project.relative_path, 1)?;
         let target = resolve_new(&binding.root_path, &name)?;
         let operation_id = Uuid::new_v4().to_string();
@@ -541,6 +540,8 @@ impl LibraryService {
             None,
             None,
         )?;
+        self.verify_active_root(&binding)?;
+        self.verify_project_file(&source, project_id)?;
         case_aware_rename(&source, &target, &operation_id).map_err(map_conflict_io)?;
         self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         let identity = file_identity(&target)?;
@@ -619,16 +620,16 @@ impl LibraryService {
         document_id: &str,
         name: &str,
     ) -> Result<DocumentSnapshot, LibraryError> {
-        self.require_writable()?;
+        let binding = self.required_writable_binding()?;
         let name = validate_document_name(name)?;
-        let binding = self.required_binding()?;
         let document = self.document_by_id(document_id)?;
         let project = self.project_for_document(document_id)?;
         validate_relative_path(&document.relative_path, 2)?;
         validate_relative_path(&project.relative_path, 1)?;
         let relative = document_relative_path(&project.relative_path, &name);
         self.ensure_document_path_available(&binding.library_id, &relative, Some(document_id))?;
-        let source = resolve_existing(&binding.root_path, &document.relative_path)?;
+        let source =
+            self.verified_document_path(&binding, document_id, &document.relative_path)?;
         let target = resolve_new(&binding.root_path, &relative)?;
         let operation_id = Uuid::new_v4().to_string();
         let expected = fingerprint(&source)?;
@@ -646,6 +647,8 @@ impl LibraryService {
             None,
             Some(&expected),
         )?;
+        self.verify_active_root(&binding)?;
+        self.verify_document_file(&source, document_id)?;
         case_aware_rename(&source, &target, &operation_id).map_err(map_conflict_io)?;
         self.update_operation(
             &operation_id,
@@ -666,8 +669,7 @@ impl LibraryService {
         document_id: &str,
         target_project_id: &str,
     ) -> Result<DocumentSnapshot, LibraryError> {
-        self.require_writable()?;
-        let binding = self.required_binding()?;
+        let binding = self.required_writable_binding()?;
         let document = self.document_by_id(document_id)?;
         let target_project = self.project_by_id(target_project_id)?;
         validate_relative_path(&document.relative_path, 2)?;
@@ -678,7 +680,8 @@ impl LibraryService {
             .ok_or_else(|| LibraryError::invalid_path("Document path is invalid"))?;
         let relative = document_relative_path(&target_project.relative_path, name);
         self.ensure_document_path_available(&binding.library_id, &relative, Some(document_id))?;
-        let source = resolve_existing(&binding.root_path, &document.relative_path)?;
+        let source =
+            self.verified_document_path(&binding, document_id, &document.relative_path)?;
         let target = resolve_new(&binding.root_path, &relative)?;
         let operation_id = Uuid::new_v4().to_string();
         let expected = fingerprint(&source)?;
@@ -696,6 +699,8 @@ impl LibraryService {
             None,
             Some(&expected),
         )?;
+        self.verify_active_root(&binding)?;
+        self.verify_document_file(&source, document_id)?;
         rename_no_replace(&source, &target).map_err(map_conflict_io)?;
         sync_parent(&target)?;
         self.update_operation(
@@ -713,11 +718,11 @@ impl LibraryService {
     }
 
     pub fn delete_document(&mut self, document_id: &str) -> Result<DeletedDocument, LibraryError> {
-        self.require_writable()?;
-        let binding = self.required_binding()?;
+        let binding = self.required_writable_binding()?;
         let document = self.document_by_id(document_id)?;
         validate_relative_path(&document.relative_path, 2)?;
-        let source = resolve_existing(&binding.root_path, &document.relative_path)?;
+        let source =
+            self.verified_document_path(&binding, document_id, &document.relative_path)?;
         let operation_id = Uuid::new_v4().to_string();
         let expected = fingerprint(&source)?;
         let project_path = document
@@ -743,6 +748,8 @@ impl LibraryService {
         )?;
         ensure_recovery_copy(&source, &recovery_path, &expected)?;
         self.update_operation(&operation_id, JournalPhase::TemporaryDurable, None)?;
+        self.verify_active_root(&binding)?;
+        self.verify_document_file(&source, document_id)?;
         recycle_file(&source)?;
         self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         self.database_mut()?
@@ -758,8 +765,7 @@ impl LibraryService {
     }
 
     pub fn reconcile(&mut self) -> Result<LibrarySnapshot, LibraryError> {
-        self.require_writable()?;
-        let binding = self.required_binding()?;
+        let binding = self.required_writable_binding()?;
         let scanned = match scan(&binding.root_path) {
             Ok(scanned) => scanned,
             Err(error) => {
@@ -796,10 +802,10 @@ impl LibraryService {
         stop_after: JournalPhase,
         stop_before_finalize_record: bool,
     ) -> Result<Option<DocumentSnapshot>, LibraryError> {
-        self.require_writable()?;
+        let binding = self.required_writable_binding()?;
         let name = validate_document_name(name)?;
-        let binding = self.required_binding()?;
         let project = self.project_by_id(project_id)?;
+        self.verified_project_path(&binding, project_id, &project.relative_path)?;
         let relative = document_relative_path(&project.relative_path, &name);
         self.ensure_document_path_available(&binding.library_id, &relative, None)?;
         let operation_id = Uuid::new_v4().to_string();
@@ -824,6 +830,8 @@ impl LibraryService {
         if stop_after == JournalPhase::IntentRecorded {
             return Ok(None);
         }
+        self.verify_active_root(&binding)?;
+        self.verified_project_path(&binding, project_id, &project.relative_path)?;
         let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
         write_durable(&temporary, b"")?;
         self.update_operation(&operation_id, JournalPhase::TemporaryDurable, None)?;
@@ -1202,6 +1210,93 @@ impl LibraryService {
             .ok_or_else(|| LibraryError::new("library_not_bound", "No library is bound"))
     }
 
+    fn required_writable_binding(&mut self) -> Result<LibraryBinding, LibraryError> {
+        self.require_writable()?;
+        let binding = self.required_binding()?;
+        self.verify_active_root(&binding)?;
+        Ok(binding)
+    }
+
+    fn verify_active_root(&mut self, binding: &LibraryBinding) -> Result<(), LibraryError> {
+        let identity = file_identity(&binding.root_path).ok().flatten();
+        if identity.as_deref() == Some(binding.root_identity.as_str()) {
+            return Ok(());
+        }
+        self.enter_read_only("root_identity_mismatch");
+        Err(LibraryError::new(
+            "root_identity_mismatch",
+            "The bound library folder was replaced or moved",
+        ))
+    }
+
+    fn verified_project_path(
+        &self,
+        binding: &LibraryBinding,
+        project_id: &str,
+        relative_path: &str,
+    ) -> Result<PathBuf, LibraryError> {
+        let path = resolve_existing(&binding.root_path, relative_path)?;
+        self.verify_project_file(&path, project_id)?;
+        Ok(path)
+    }
+
+    fn verify_project_file(&self, path: &Path, project_id: &str) -> Result<(), LibraryError> {
+        let expected = self
+            .require_metadata()?
+            .connection()
+            .query_row(
+                "SELECT file_identity FROM projects WHERE id = ?1",
+                [project_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(LibraryError::database)?;
+        if expected.is_some() && file_identity(path)? == expected {
+            return Ok(());
+        }
+        Err(LibraryError::new(
+            "external_change",
+            "The project folder changed outside Cairn.md; reconcile before modifying it",
+        ))
+    }
+
+    fn verified_document_path(
+        &self,
+        binding: &LibraryBinding,
+        document_id: &str,
+        relative_path: &str,
+    ) -> Result<PathBuf, LibraryError> {
+        let path = resolve_existing(&binding.root_path, relative_path)?;
+        self.verify_document_file(&path, document_id)?;
+        Ok(path)
+    }
+
+    fn verify_document_file(&self, path: &Path, document_id: &str) -> Result<(), LibraryError> {
+        let (expected_identity, expected_fingerprint) = self
+            .require_metadata()?
+            .connection()
+            .query_row(
+                "SELECT file_identity, disk_fingerprint FROM documents WHERE id = ?1",
+                [document_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                    ))
+                },
+            )
+            .map_err(LibraryError::database)?;
+        if expected_identity.is_some()
+            && file_identity(path)? == expected_identity
+            && fingerprint(path)? == expected_fingerprint
+        {
+            return Ok(());
+        }
+        Err(LibraryError::new(
+            "external_change",
+            "The document changed outside Cairn.md; reconcile before modifying it",
+        ))
+    }
+
     fn project_by_id(&self, id: &str) -> Result<ProjectSnapshot, LibraryError> {
         self.snapshot()?
             .projects
@@ -1468,13 +1563,34 @@ fn reconcile_transaction(
         }
         let key = path_key(&candidate.relative_path);
         if let Some(existing) = documents.iter().find(|row| {
+            let replacement_is_unambiguous = candidate.file_identity.as_ref().is_some_and(
+                |candidate_identity| {
+                    flattened
+                        .iter()
+                        .filter(|(_, scanned)| {
+                            scanned.file_identity.as_ref() == Some(candidate_identity)
+                        })
+                        .count()
+                        == 1
+                        && !documents.iter().any(|other| {
+                            other.id != row.id
+                                && other.file_identity.as_ref() == Some(candidate_identity)
+                        })
+                        && row.file_identity.as_ref().is_none_or(|previous_identity| {
+                            !flattened.iter().any(|(_, scanned)| {
+                                scanned.file_identity.as_ref() == Some(previous_identity)
+                            })
+                        })
+                },
+            );
             !used_documents.contains(&row.id)
                 && row.path_key == key
                 && (allow_confirmed_path_rebind
                     || identities_compatible(
                         row.file_identity.as_ref(),
                         candidate.file_identity.as_ref(),
-                    ))
+                    )
+                    || replacement_is_unambiguous)
         }) {
             document_ids[index] = Some(existing.id.clone());
             used_documents.insert(existing.id.clone());

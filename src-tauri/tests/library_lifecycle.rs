@@ -87,6 +87,48 @@ fn project_and_document_lifecycle_preserves_stable_ids() {
 }
 
 #[test]
+fn live_root_replacement_blocks_mutation_of_the_new_occupant() {
+    let app_data = TempDir::new().unwrap();
+    let container = TempDir::new().unwrap();
+    let root = container.path().join("Library");
+    let moved_root = container.path().join("MovedLibrary");
+    fs::create_dir(&root).unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(&root).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "note.md").unwrap();
+
+    fs::rename(&root, &moved_root).unwrap();
+    fs::create_dir_all(root.join("Alpha")).unwrap();
+    fs::write(root.join("Alpha/note.md"), "unrelated").unwrap();
+
+    let error = service.delete_document(&document.id).unwrap_err();
+    assert_eq!(error.code(), "root_identity_mismatch");
+    assert!(root.join("Alpha/note.md").is_file());
+    assert_eq!(fs::read_to_string(root.join("Alpha/note.md")).unwrap(), "unrelated");
+    assert_eq!(service.snapshot().unwrap().mode, LibraryMode::ReadOnly);
+}
+
+#[test]
+fn replaced_project_or_document_is_never_mutated_before_reconciliation() {
+    let (_app_data, root, mut service) = service_and_root();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "note.md").unwrap();
+
+    fs::rename(root.path().join("Alpha"), root.path().join("OriginalAlpha")).unwrap();
+    fs::create_dir(root.path().join("Alpha")).unwrap();
+    fs::write(root.path().join("Alpha/note.md"), "unrelated").unwrap();
+
+    let error = service.delete_document(&document.id).unwrap_err();
+    assert_eq!(error.code(), "external_change");
+    assert_eq!(
+        fs::read_to_string(root.path().join("Alpha/note.md")).unwrap(),
+        "unrelated"
+    );
+}
+
+#[test]
 fn duplicate_names_are_case_folded_and_traversal_is_rejected() {
     let (_app_data, root, mut service) = service_and_root();
     service.bind_root(root.path()).unwrap();
@@ -167,6 +209,24 @@ fn external_rename_rebinds_the_existing_document_without_duplicates() {
     assert_eq!(documents.len(), 1);
     assert_eq!(documents[0].id, document.id);
     assert_eq!(documents[0].relative_path, "Alpha/after.md");
+}
+
+#[test]
+fn unambiguous_atomic_external_save_preserves_the_document_id() {
+    let (_app_data, root, mut service) = service_and_root();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "note.md").unwrap();
+    let target = root.path().join("Alpha/note.md");
+    let replacement = root.path().join("Alpha/.external-replacement.tmp");
+    fs::write(&replacement, "changed outside Cairn.md").unwrap();
+    fs::remove_file(&target).unwrap();
+    fs::rename(&replacement, &target).unwrap();
+
+    let reconciled = service.reconcile().unwrap();
+
+    assert_eq!(reconciled.projects[0].documents.len(), 1);
+    assert_eq!(reconciled.projects[0].documents[0].id, document.id);
 }
 
 #[test]
