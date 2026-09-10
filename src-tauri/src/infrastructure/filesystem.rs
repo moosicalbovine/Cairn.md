@@ -21,6 +21,7 @@ pub struct CandidateRootProbe {
     pub can_create: bool,
     pub can_flush: bool,
     pub can_rename_without_overwrite: bool,
+    pub can_atomic_replace: bool,
     pub recoverable_delete: bool,
     pub can_bind: bool,
     pub reason: Option<String>,
@@ -61,9 +62,12 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
     let target = canonical.join(format!(".cairn-probe-{token}.moved"));
     let collision = canonical.join(format!(".cairn-probe-{token}.collision"));
     let recovery = canonical.join(format!(".cairn-probe-{token}.recovery"));
+    let replace_target = canonical.join(format!(".cairn-probe-{token}.replace-target"));
+    let replacement = canonical.join(format!(".cairn-probe-{token}.replacement"));
     let mut can_create = false;
     let mut can_flush = false;
     let mut can_rename = false;
+    let mut can_replace = false;
     let mut can_recover = false;
 
     let result = (|| -> Result<(), LibraryError> {
@@ -95,6 +99,11 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
             can_rename = true;
         }
         fs::rename(&target, &source).map_err(LibraryError::io)?;
+        write_durable(&replace_target, b"before")?;
+        write_durable(&replacement, b"after")?;
+        atomic_replace(&replace_target, &replacement)?;
+        can_replace = !replacement.exists()
+            && fs::read(&replace_target).map_err(LibraryError::io)? == b"after";
         let expected = fingerprint(&source)?;
         copy_durable_no_replace(&source, &recovery)?;
         recycle_file(&source)?;
@@ -106,11 +115,14 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
     let _ = fs::remove_file(&target);
     let _ = fs::remove_file(&collision);
     let _ = fs::remove_file(&recovery);
+    let _ = fs::remove_file(&replace_target);
+    let _ = fs::remove_file(&replacement);
 
     let reason = result
         .err()
         .map(|error| format!("capability_probe_failed:{error}"));
-    let can_bind = can_create && can_flush && can_rename && can_recover && reason.is_none();
+    let can_bind =
+        can_create && can_flush && can_rename && can_replace && can_recover && reason.is_none();
     Ok(CandidateRootProbe {
         candidate_path: canonical.clone(),
         root_identity: file_identity(&canonical)?,
@@ -119,6 +131,7 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
         can_create,
         can_flush,
         can_rename_without_overwrite: can_rename,
+        can_atomic_replace: can_replace,
         recoverable_delete: can_recover,
         can_bind,
         reason,
@@ -134,6 +147,7 @@ fn failed_probe(path: PathBuf, reason: &str, exists: bool) -> CandidateRootProbe
         can_create: false,
         can_flush: false,
         can_rename_without_overwrite: false,
+        can_atomic_replace: false,
         recoverable_delete: false,
         can_bind: false,
         reason: Some(reason.to_owned()),
@@ -296,6 +310,36 @@ pub fn copy_durable_no_replace(source: &Path, target: &Path) -> Result<(), Libra
         return Err(LibraryError::io(error));
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn atomic_replace(target: &Path, replacement: &Path) -> Result<(), LibraryError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    let mut target_wide = target.as_os_str().encode_wide().collect::<Vec<_>>();
+    target_wide.push(0);
+    let mut replacement_wide = replacement.as_os_str().encode_wide().collect::<Vec<_>>();
+    replacement_wide.push(0);
+    let replaced = unsafe {
+        ReplaceFileW(
+            target_wide.as_ptr(),
+            replacement_wide.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        return Err(LibraryError::io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(target: &Path, replacement: &Path) -> Result<(), LibraryError> {
+    fs::rename(replacement, target).map_err(LibraryError::io)
 }
 
 #[cfg(windows)]

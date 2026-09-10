@@ -32,6 +32,7 @@ fn binds_one_root_and_indexes_only_relative_direct_children() {
 
     let probe = service.probe_candidate(root.path()).unwrap();
     assert!(probe.can_bind);
+    assert!(probe.can_atomic_replace);
     let snapshot = service.bind_root(root.path()).unwrap();
 
     assert_eq!(snapshot.mode, LibraryMode::Writable);
@@ -269,14 +270,15 @@ fn relocation_requires_confirmation_and_increments_only_the_binding_generation()
     assert_eq!(preview.matched_documents, 1);
     assert_eq!(
         service.snapshot().unwrap().binding.unwrap().root_path,
-        original
+        binding.root_path.clone()
     );
 
+    let expected_relocated_path = preview.candidate_path.clone();
     let relinked = service.confirm_relink(preview).unwrap();
     let rebound = relinked.binding.unwrap();
     assert_eq!(rebound.library_id, binding.library_id);
     assert_eq!(rebound.generation, binding.generation + 1);
-    assert_eq!(rebound.root_path, relocated);
+    assert_eq!(rebound.root_path, expected_relocated_path);
     assert_eq!(relinked.projects[0].id, project.id);
     assert_eq!(relinked.projects[0].documents[0].id, document.id);
 }

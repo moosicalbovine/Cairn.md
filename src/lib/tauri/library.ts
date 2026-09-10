@@ -38,6 +38,7 @@ export type CandidateRootProbe = Readonly<{
   canCreate: boolean;
   canFlush: boolean;
   canRenameWithoutOverwrite: boolean;
+  canAtomicReplace: boolean;
   recoverableDelete: boolean;
   canBind: boolean;
   reason: string | null;
