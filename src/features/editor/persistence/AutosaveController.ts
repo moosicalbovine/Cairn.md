@@ -132,6 +132,7 @@ export class AutosaveController {
     const durable = this.#durableSnapshot;
     if (
       revision === 0 ||
+      revision <= this.#diskRevision ||
       (revision <= (durable?.revision ?? 0) &&
         durable?.baseFingerprint === this.#baseFingerprint)
     ) {
