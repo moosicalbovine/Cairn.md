@@ -74,7 +74,7 @@ function isRelativePath(value: unknown, expectedParts: number): value is string 
   );
 }
 
-function parseDocument(value: unknown): DocumentSnapshot {
+export function parseDocumentSnapshot(value: unknown): DocumentSnapshot {
   if (
     !isRecord(value) ||
     typeof value.id !== "string" ||
@@ -106,7 +106,7 @@ function parseProject(value: unknown): ProjectSnapshot {
   return {
     id: value.id,
     relativePath: value.relativePath,
-    documents: value.documents.map(parseDocument),
+    documents: value.documents.map(parseDocumentSnapshot),
   };
 }
 
