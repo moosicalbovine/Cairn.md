@@ -26,6 +26,7 @@ export class MarkdownSession {
 
   #source: string;
   #revision = 0;
+  #closed = false;
   #originalBytes: Uint8Array;
   #listeners = new Set<MarkdownSessionListener>();
 
@@ -109,7 +110,15 @@ export class MarkdownSession {
     return () => this.#listeners.delete(listener);
   }
 
+  close(): void {
+    this.#closed = true;
+    this.#listeners.clear();
+  }
+
   #assertEditable(): void {
+    if (this.#closed) {
+      throw new Error("This Markdown editing session is closed.");
+    }
     if (this.isReadOnly) {
       throw new Error("Markdown with invalid UTF-8 is read-only.");
     }

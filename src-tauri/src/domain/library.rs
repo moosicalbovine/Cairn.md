@@ -704,12 +704,7 @@ impl LibraryService {
                     "A recovery snapshot from another editing session must be resolved first",
                 ));
             }
-            if RecoveryLifecycle::parse(&lifecycle)? == RecoveryLifecycle::Conflict {
-                return Err(LibraryError::new(
-                    "external_conflict",
-                    "The external-change conflict must be resolved before editing continues",
-                ));
-            }
+            let lifecycle = RecoveryLifecycle::parse(&lifecycle)?;
             if revision > request.revision {
                 transaction.commit().map_err(LibraryError::database)?;
                 return self
@@ -729,7 +724,7 @@ impl LibraryService {
                     ));
                 }
                 if base_fingerprint == request.base_fingerprint
-                    || RecoveryLifecycle::parse(&lifecycle)? != RecoveryLifecycle::Draft
+                    || lifecycle != RecoveryLifecycle::Draft
                 {
                     transaction.commit().map_err(LibraryError::database)?;
                     return self
@@ -741,6 +736,42 @@ impl LibraryService {
                             )
                         });
                 }
+            }
+            if lifecycle == RecoveryLifecycle::Conflict {
+                transaction
+                    .execute(
+                        "UPDATE recovery_snapshots SET revision = ?1, content = ?2, content_hash = ?3, base_fingerprint = ?4, intended_disk_hash = ?3, durable_at = ?5 WHERE document_id = ?6 AND session_generation = ?7",
+                        params![
+                            request.revision,
+                            &request.bytes,
+                            &intended_disk_hash,
+                            &request.base_fingerprint,
+                            durable_at,
+                            &request.document_id,
+                            &request.session_generation,
+                        ],
+                    )
+                    .map_err(LibraryError::database)?;
+                transaction
+                    .execute(
+                        "UPDATE external_conflicts SET draft_revision = ?1, draft_hash = ?2, captured_at = ?3 WHERE document_id = ?4",
+                        params![
+                            request.revision,
+                            &intended_disk_hash,
+                            durable_at,
+                            &request.document_id,
+                        ],
+                    )
+                    .map_err(LibraryError::database)?;
+                transaction.commit().map_err(LibraryError::database)?;
+                return self
+                    .load_recovery_snapshot(&request.document_id)?
+                    .ok_or_else(|| {
+                        LibraryError::new(
+                            "recovery_missing",
+                            "Recovery snapshot disappeared while it was being read",
+                        )
+                    });
             }
         }
 

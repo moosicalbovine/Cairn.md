@@ -170,6 +170,19 @@ fn external_change_is_preserved_beside_the_recoverable_draft() {
     assert_eq!(recovery.lifecycle_state, RecoveryLifecycle::Conflict);
     assert_eq!(service.pending_operation_count().unwrap(), 0);
 
+    let newer_recovery = service
+        .store_recovery_snapshot(request(
+            &document_id,
+            &generation,
+            2,
+            &base_fingerprint,
+            "local draft typed during conflict",
+        ))
+        .unwrap();
+    assert_eq!(newer_recovery.revision, 2);
+    assert_eq!(newer_recovery.bytes, b"local draft typed during conflict");
+    assert_eq!(newer_recovery.lifecycle_state, RecoveryLifecycle::Conflict);
+
     fs::write(root.path().join("Alpha/draft.md"), "external edit again").unwrap();
     let recovered_copy = service
         .save_recovery_copy(&document_id, &generation)
@@ -177,7 +190,7 @@ fn external_change_is_preserved_beside_the_recoverable_draft() {
     assert_eq!(recovered_copy.relative_path, "Alpha/draft (recovered).md");
     assert_eq!(
         fs::read(root.path().join(&recovered_copy.relative_path)).unwrap(),
-        b"local draft"
+        b"local draft typed during conflict"
     );
     assert_eq!(
         fs::read_to_string(root.path().join("Alpha/draft.md")).unwrap(),

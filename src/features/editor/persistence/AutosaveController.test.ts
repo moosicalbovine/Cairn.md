@@ -181,6 +181,52 @@ describe("AutosaveController", () => {
     await controller.dispose();
   });
 
+  it("preserves typing that races with an external conflict before closing the session", async () => {
+    vi.useFakeTimers();
+    const save = deferred<SaveDocumentResult>();
+    let conflicted = false;
+    const storeRecoverySnapshot = vi.fn(async (request: RecoverySnapshotRequest) => ({
+      ...snapshotOf(request),
+      lifecycleState: conflicted ? "Conflict" as const : "Draft" as const,
+    }));
+    const onConflict = vi.fn();
+    const session = MarkdownSession.fromSource("");
+    const controller = new AutosaveController({
+      documentId: "document-1",
+      session,
+      baseFingerprint: "base-0",
+      generation: "generation-1",
+      onProgress: vi.fn(),
+      onConflict,
+      port: {
+        storeRecoverySnapshot,
+        saveDocument: () => save.promise,
+      },
+    });
+
+    session.replaceSource("first draft", 0);
+    await vi.advanceTimersByTimeAsync(350);
+    session.replaceSource("newest local draft", 1);
+    conflicted = true;
+    save.resolve({
+      status: "conflict",
+      revision: 1,
+      diskFingerprint: "external-hash",
+    });
+    await vi.runAllTimersAsync();
+
+    expect(onConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        revision: 2,
+        bytes: new TextEncoder().encode("newest local draft"),
+        lifecycleState: "Conflict",
+      }),
+    );
+    expect(storeRecoverySnapshot.mock.calls.at(-1)?.[0].revision).toBe(2);
+    expect(() => session.replaceSource("too late", 2)).toThrow(/closed/);
+    await controller.dispose();
+  });
+
   it("flushes acknowledged text to recovery before disposal", async () => {
     vi.useFakeTimers();
     const storeRecoverySnapshot = vi.fn(async (request) => snapshotOf(request));
@@ -234,5 +280,54 @@ describe("AutosaveController", () => {
     expect(durableRevisions.at(-1)).toBeGreaterThanOrEqual(16);
     await controller.dispose();
     expect(durableRevisions.at(-1)).toBe(20);
+  });
+
+  it("serializes concurrent recovery flush requests", async () => {
+    vi.useFakeTimers();
+    const firstStore = deferred<RecoverySnapshot>();
+    let calls = 0;
+    let inFlight = 0;
+    let maximumInFlight = 0;
+    const storeRecoverySnapshot = vi.fn(async (request: RecoverySnapshotRequest) => {
+      calls += 1;
+      inFlight += 1;
+      maximumInFlight = Math.max(maximumInFlight, inFlight);
+      const snapshot = calls === 1
+        ? await firstStore.promise
+        : snapshotOf(request);
+      inFlight -= 1;
+      return snapshot;
+    });
+    const session = MarkdownSession.fromSource("");
+    const controller = new AutosaveController({
+      documentId: "document-1",
+      session,
+      baseFingerprint: "base-0",
+      generation: "generation-1",
+      onProgress: vi.fn(),
+      port: {
+        storeRecoverySnapshot,
+        saveDocument: vi.fn(),
+      },
+    });
+
+    session.replaceSource("one", 0);
+    await vi.advanceTimersByTimeAsync(350);
+    session.replaceSource("two", 1);
+    await vi.advanceTimersByTimeAsync(350);
+    session.replaceSource("three", 2);
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(storeRecoverySnapshot).toHaveBeenCalledTimes(1);
+    const firstRequest = storeRecoverySnapshot.mock.calls[0]?.[0];
+    if (!firstRequest) throw new Error("The first recovery write did not start.");
+    firstStore.resolve(snapshotOf(firstRequest));
+    await controller.dispose();
+
+    expect(maximumInFlight).toBe(1);
+    expect(storeRecoverySnapshot).toHaveBeenCalledTimes(2);
+    expect(storeRecoverySnapshot.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ revision: 3 }),
+    );
   });
 });

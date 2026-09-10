@@ -30,7 +30,7 @@ type AutosaveOptions = Readonly<{
   delayMs?: number;
   port?: PersistencePort;
   initialSnapshot?: RecoverySnapshot;
-  onConflict?(): void;
+  onConflict?(snapshot: RecoverySnapshot): void;
 }>;
 
 const defaultPort: PersistencePort = { storeRecoverySnapshot, saveDocument };
@@ -42,7 +42,7 @@ export class AutosaveController {
   readonly #delayMs: number;
   readonly #port: PersistencePort;
   readonly #onProgress: (progress: PersistenceProgress) => void;
-  readonly #onConflict: (() => void) | undefined;
+  readonly #onConflict: ((snapshot: RecoverySnapshot) => void) | undefined;
   readonly #unsubscribe: () => void;
 
   #baseFingerprint: string;
@@ -102,6 +102,7 @@ export class AutosaveController {
     this.#unsubscribe();
     this.#clearTimers();
     await this.#flushRecovery();
+    this.#session.close();
   }
 
   #acknowledgeEdit(): void {
@@ -132,22 +133,32 @@ export class AutosaveController {
   }
 
   async #flushRecovery(): Promise<void> {
-    if (this.#snapshotRun) {
-      await this.#snapshotRun;
+    if (this.#snapshotRun) return this.#snapshotRun;
+    const run = this.#runRecoveryLoop();
+    this.#snapshotRun = run;
+    try {
+      await run;
+    } finally {
+      if (this.#snapshotRun === run) this.#snapshotRun = null;
     }
-    const revision = this.#session.revision;
-    const durable = this.#durableSnapshot;
-    if (
-      revision === 0 ||
-      revision <= this.#diskRevision ||
-      (revision <= (durable?.revision ?? 0) &&
-        durable?.baseFingerprint === this.#baseFingerprint)
-    ) {
-      return;
-    }
+  }
 
-    const request = this.#request(revision);
-    const run = this.#port.storeRecoverySnapshot(request).then((snapshot) => {
+  async #runRecoveryLoop(): Promise<void> {
+    for (;;) {
+      const revision = this.#session.revision;
+      const durable = this.#durableSnapshot;
+      if (
+        revision === 0 ||
+        revision <= this.#diskRevision ||
+        (revision <= (durable?.revision ?? 0) &&
+          durable?.baseFingerprint === this.#baseFingerprint)
+      ) {
+        return;
+      }
+
+      const snapshot = await this.#port.storeRecoverySnapshot(
+        this.#request(revision),
+      );
       if (
         !this.#durableSnapshot ||
         snapshot.revision >= this.#durableSnapshot.revision
@@ -155,19 +166,6 @@ export class AutosaveController {
         this.#durableSnapshot = snapshot;
       }
       this.#emit(this.#failed ? "Save failed" : "Saving…");
-    });
-    this.#snapshotRun = run;
-    try {
-      await run;
-    } finally {
-      if (this.#snapshotRun === run) this.#snapshotRun = null;
-    }
-
-    if (
-      this.#session.revision > (this.#durableSnapshot?.revision ?? 0) ||
-      this.#durableSnapshot?.baseFingerprint !== this.#baseFingerprint
-    ) {
-      await this.#flushRecovery();
     }
   }
 
@@ -188,7 +186,21 @@ export class AutosaveController {
         if (result.status === "conflict") {
           this.#failed = true;
           this.#emit("Save failed");
-          if (!this.#disposed) this.#onConflict?.();
+          if (!this.#disposed) {
+            // Re-store even an unchanged revision so the returned snapshot carries
+            // the backend's Conflict lifecycle, then keep looping if typing raced
+            // with the protected save.
+            this.#durableSnapshot = null;
+            await this.#flushRecovery();
+            const conflict = this.#durableSnapshot;
+            if (conflict && !this.#disposed) {
+              this.#disposed = true;
+              this.#unsubscribe();
+              this.#clearTimers();
+              this.#session.close();
+              this.#onConflict?.(conflict);
+            }
+          }
           return;
         }
         if (result.revision >= this.#diskRevision) {

@@ -72,25 +72,14 @@ export function DocumentEditor({
         baseFingerprint,
         ...(recovered ? { initialSnapshot: recovered } : {}),
         onProgress: setPersistence,
-        onConflict: () => {
-          void loadRecoverySnapshot(document.id).then(
-            (pending) => {
-              if (!pending || sessionEpochRef.current !== sessionEpoch) return;
-              sessionEpochRef.current += 1;
-              const controller = autosaveRef.current;
-              autosaveRef.current = null;
-              void controller?.dispose();
-              editorRef.current?.dispose();
-              editorRef.current = null;
-              setEditor(null);
-              setRecovery(pending);
-            },
-            (reason) => {
-              if (sessionEpochRef.current === sessionEpoch) {
-                setError(reason instanceof Error ? reason.message : "Recovery could not be loaded.");
-              }
-            },
-          );
+        onConflict: (pending) => {
+          if (sessionEpochRef.current !== sessionEpoch) return;
+          sessionEpochRef.current += 1;
+          autosaveRef.current = null;
+          editorRef.current?.dispose();
+          editorRef.current = null;
+          setEditor(null);
+          setRecovery(pending);
         },
       });
     }
