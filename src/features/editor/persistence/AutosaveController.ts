@@ -113,7 +113,7 @@ export class AutosaveController {
   }
 
   #scheduleSnapshot(): void {
-    if (this.#snapshotTimer !== null) clearTimeout(this.#snapshotTimer);
+    if (this.#snapshotTimer !== null) return;
     this.#snapshotTimer = setTimeout(() => {
       this.#snapshotTimer = null;
       void this.#flushRecovery().catch(() => {

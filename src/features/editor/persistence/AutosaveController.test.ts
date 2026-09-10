@@ -204,4 +204,35 @@ describe("AutosaveController", () => {
       expect.objectContaining({ revision: 1 }),
     );
   });
+
+  it("advances durable recovery on a bounded cadence during continuous typing", async () => {
+    vi.useFakeTimers();
+    const durableRevisions: number[] = [];
+    const session = MarkdownSession.fromSource("");
+    const controller = new AutosaveController({
+      documentId: "document-1",
+      session,
+      baseFingerprint: "base-0",
+      generation: "generation-1",
+      onProgress: vi.fn(),
+      port: {
+        storeRecoverySnapshot: async (request) => {
+          durableRevisions.push(request.revision);
+          return snapshotOf(request);
+        },
+        saveDocument: vi.fn(),
+      },
+    });
+
+    for (let revision = 0; revision < 20; revision += 1) {
+      session.replaceSource(`continuous ${revision + 1}`, revision);
+      await vi.advanceTimersByTimeAsync(100);
+    }
+
+    expect(durableRevisions.length).toBeGreaterThanOrEqual(4);
+    expect(durableRevisions[0]).toBeLessThanOrEqual(4);
+    expect(durableRevisions.at(-1)).toBeGreaterThanOrEqual(16);
+    await controller.dispose();
+    expect(durableRevisions.at(-1)).toBe(20);
+  });
 });
