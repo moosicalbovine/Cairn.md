@@ -33,7 +33,6 @@ export function LibraryPane({
 
   useEffect(() => {
     if (activeFolderId === null) {
-      setEntries([]);
       return;
     }
     let current = true;
@@ -91,6 +90,7 @@ export function LibraryPane({
               type="button"
               disabled={!folder.available}
               onClick={() => {
+                setEntries([]);
                 setActiveFolderId(folder.id);
                 setDirectory(null);
               }}
