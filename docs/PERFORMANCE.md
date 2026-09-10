@@ -6,9 +6,9 @@ Cairn.md v0.1.0 targets a responsive Windows desktop experience without bundling
 
 | Metric | Required result | Current evidence |
 |---|---:|---|
-| Cold start to an interactive window | p95 at or below 1.5 seconds | Harness implemented; reference run pending |
-| Editor input to painted frame | p95 at or below 50 ms | Harness pending |
-| Normal document open | p95 at or below 250 ms | Harness pending |
+| Cold start to an interactive editor | p95 at or below 1.5 seconds | Harness implemented; reference run pending |
+| Editor input to painted frame | p95 at or below 50 ms | Harness implemented; reference run pending |
+| Normal document open | p95 at or below 250 ms | Harness implemented; reference run pending |
 | Idle process-tree working set | Below 150 MB after 60 seconds | Harness implemented; reference run pending |
 | Durable recovery lag | At most 2 seconds | Deterministic autosave tests implemented; process-termination harness pending |
 | Stress integrity | No crash or unintended byte change | 1,000-file reconciliation and 10,000-edit tests implemented |
@@ -21,12 +21,10 @@ Build the release binary, then run at least 20 independent launches:
 
 ```powershell
 npm run tauri build
-npm run perf:startup -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\startup.json"
+npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
 ```
 
-The harness measures elapsed time from process creation until Windows reports Cairn.md's main window, closes the full process tree between samples, and separately records the process-tree working set after the idle interval. A non-zero exit means at least one enforced threshold failed.
-
-This is currently a conservative process/window baseline, not yet the complete V7 startup proof: the final harness must also observe that the library and editor accept input. Input-paint and document-open measurements likewise remain required before release sign-off.
+Each run uses isolated app metadata and never opens the user's library. The harness measures from process creation until a real Milkdown editor has painted and accepted input, closes the full process tree between startup samples, records 20 real visual-editor opens and edits through the next painted frame, and measures process-tree working set after the idle interval. A non-zero exit means at least one enforced threshold failed.
 
 ## Stress coverage
 

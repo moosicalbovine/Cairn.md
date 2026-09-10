@@ -31,7 +31,11 @@ fn ready_path(output: &Path) -> PathBuf {
 }
 
 fn validate_samples(samples: &[f64], name: &str) -> Result<(), String> {
-    if samples.len() < 20 || samples.iter().any(|sample| !sample.is_finite() || *sample < 0.0) {
+    if samples.len() < 20
+        || samples
+            .iter()
+            .any(|sample| !sample.is_finite() || *sample < 0.0)
+    {
         return Err(format!(
             "{name} must contain at least 20 finite non-negative samples"
         ));

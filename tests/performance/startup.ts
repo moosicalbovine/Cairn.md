@@ -1,6 +1,14 @@
-import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 type ProcessSample = Readonly<{
   mainWindowHandle: number;
@@ -13,6 +21,11 @@ type StartupSample = Readonly<{
   initialWorkingSetMb: number;
 }>;
 
+type BrowserReport = Readonly<{
+  documentOpenMs: readonly number[];
+  inputLatencyMs: readonly number[];
+}>;
+
 type BenchmarkOptions = Readonly<{
   binaryPath: string;
   samples: number;
@@ -20,9 +33,19 @@ type BenchmarkOptions = Readonly<{
   outputPath: string | null;
 }>;
 
+type PerformanceProcess = Readonly<{
+  child: ChildProcess;
+  directory: string;
+  reportPath: string;
+  readyPath: string;
+}>;
+
 const pollIntervalMs = 50;
 const startupTimeoutMs = 10_000;
+const reportTimeoutMs = 120_000;
 const startupLimitMs = 1_500;
+const documentOpenLimitMs = 250;
+const inputLatencyLimitMs = 50;
 const idleMemoryLimitMb = 150;
 
 function readProcessSample(processId: number, includeDescendants = false): ProcessSample | undefined {
@@ -36,13 +59,11 @@ function readProcessSample(processId: number, includeDescendants = false): Proce
     "$cairnWorkingSet = ($cairnIds | ForEach-Object { (Get-Process -Id $_ -ErrorAction SilentlyContinue).WorkingSet64 } | Measure-Object -Sum).Sum",
     "@{ mainWindowHandle = $cairnRoot.MainWindowHandle.ToInt64(); workingSetBytes = [double]$cairnWorkingSet } | ConvertTo-Json -Compress",
   ].join("; ");
-
   const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
     encoding: "utf8",
     windowsHide: true,
   });
   if (result.status !== 0 || !result.stdout.trim()) return undefined;
-
   const parsed: unknown = JSON.parse(result.stdout);
   if (
     typeof parsed !== "object" ||
@@ -57,54 +78,111 @@ function readProcessSample(processId: number, includeDescendants = false): Proce
   return parsed as ProcessSample;
 }
 
-function stopProcessTree(processId: number): void {
-  spawnSync("taskkill.exe", ["/PID", String(processId), "/T", "/F"], {
+function startPerformanceProcess(binaryPath: string): PerformanceProcess {
+  const directory = mkdtempSync(join(tmpdir(), "cairn-performance-"));
+  const reportPath = join(directory, "browser-report.json");
+  const child = spawn(binaryPath, [], {
     stdio: "ignore",
-    windowsHide: true,
+    windowsHide: false,
+    env: {
+      ...process.env,
+      CAIRN_PERF_MODE: "1",
+      CAIRN_PERF_OUTPUT: reportPath,
+      CAIRN_APP_DATA_DIR: join(directory, "app-data"),
+    },
   });
+  if (child.pid === undefined) {
+    rmSync(directory, { recursive: true, force: true });
+    throw new Error("Cairn.md process did not start");
+  }
+  return { child, directory, reportPath, readyPath: `${reportPath}.ready` };
+}
+
+function stopPerformanceProcess(run: PerformanceProcess): void {
+  if (run.child.pid !== undefined) {
+    spawnSync("taskkill.exe", ["/PID", String(run.child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  }
+  rmSync(run.directory, { recursive: true, force: true });
 }
 
 async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
-async function waitForWindow(processId: number): Promise<ProcessSample> {
+async function waitForFile(
+  run: PerformanceProcess,
+  path: string,
+  timeoutMs: number,
+  description: string,
+): Promise<void> {
   const startedAt = performance.now();
-  while (performance.now() - startedAt < startupTimeoutMs) {
-    const sample = readProcessSample(processId);
-    if (sample?.mainWindowHandle) return sample;
+  while (performance.now() - startedAt < timeoutMs) {
+    if (existsSync(path)) return;
+    if (run.child.exitCode !== null || run.child.signalCode !== null) {
+      throw new Error(`Cairn.md exited before ${description}`);
+    }
     await delay(pollIntervalMs);
   }
-  throw new Error("Cairn.md did not create its main window within 10 seconds");
+  throw new Error(`Cairn.md did not produce ${description} within ${timeoutMs / 1_000} seconds`);
 }
 
 async function measureStartup(binaryPath: string, sample: number): Promise<StartupSample> {
   const startedAt = performance.now();
-  const child = spawn(binaryPath, [], { stdio: "ignore", windowsHide: false });
-  if (child.pid === undefined) throw new Error("Cairn.md process did not start");
+  const run = startPerformanceProcess(binaryPath);
   try {
-    const processSample = await waitForWindow(child.pid);
+    await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
+    const processSample = readProcessSample(run.child.pid ?? -1);
+    if (!processSample?.mainWindowHandle) throw new Error("Cairn.md reported ready without a window");
     return {
       sample,
       startupMs: Number((performance.now() - startedAt).toFixed(1)),
       initialWorkingSetMb: Number((processSample.workingSetBytes / 1024 / 1024).toFixed(1)),
     };
   } finally {
-    stopProcessTree(child.pid);
+    stopPerformanceProcess(run);
   }
 }
 
-async function measureIdleMemory(binaryPath: string, idleSeconds: number): Promise<number> {
-  const child = spawn(binaryPath, [], { stdio: "ignore", windowsHide: false });
-  if (child.pid === undefined) throw new Error("Cairn.md process did not start");
+function parseBrowserReport(path: string): BrowserReport {
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("documentOpenMs" in parsed) ||
+    !("inputLatencyMs" in parsed) ||
+    !Array.isArray(parsed.documentOpenMs) ||
+    !Array.isArray(parsed.inputLatencyMs) ||
+    parsed.documentOpenMs.length < 20 ||
+    parsed.inputLatencyMs.length < 20 ||
+    parsed.documentOpenMs.some((value) => typeof value !== "number" || !Number.isFinite(value)) ||
+    parsed.inputLatencyMs.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    throw new Error("Cairn.md returned an invalid browser performance report");
+  }
+  return parsed as BrowserReport;
+}
+
+async function measureBrowserAndIdle(binaryPath: string, idleSeconds: number): Promise<{
+  browser: BrowserReport;
+  idleWorkingSetMb: number;
+}> {
+  const run = startPerformanceProcess(binaryPath);
   try {
-    await waitForWindow(child.pid);
+    await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
+    await waitForFile(run, run.reportPath, reportTimeoutMs, "the browser measurements");
+    const browser = parseBrowserReport(run.reportPath);
     await delay(idleSeconds * 1_000);
-    const sample = readProcessSample(child.pid, true);
+    const sample = readProcessSample(run.child.pid ?? -1, true);
     if (!sample) throw new Error("Cairn.md exited before the idle-memory sample");
-    return Number((sample.workingSetBytes / 1024 / 1024).toFixed(1));
+    return {
+      browser,
+      idleWorkingSetMb: Number((sample.workingSetBytes / 1024 / 1024).toFixed(1)),
+    };
   } finally {
-    stopProcessTree(child.pid);
+    stopPerformanceProcess(run);
   }
 }
 
@@ -112,6 +190,18 @@ function percentile(values: readonly number[], percentileValue: number): number 
   const sorted = [...values].sort((left, right) => left - right);
   const index = Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1);
   return sorted[index] ?? Number.NaN;
+}
+
+function metricSummary(values: readonly number[], limitP95: number) {
+  const p95 = percentile(values, 95);
+  return {
+    samples: values,
+    p50: percentile(values, 50),
+    p95,
+    maximum: Math.max(...values),
+    limitP95,
+    passed: p95 <= limitP95,
+  };
 }
 
 function parsePositiveInteger(value: string | undefined, option: string): number {
@@ -126,7 +216,7 @@ function parseOptions(args: readonly string[]): BenchmarkOptions {
   const binary = args[0];
   if (!binary) {
     throw new Error(
-      "Usage: npm run perf:startup -- <cairn-md.exe> [--samples 20] [--idle-seconds 60] [--output path]",
+      "Usage: npm run perf -- <cairn-md.exe> [--samples 20] [--idle-seconds 60] [--output path]",
     );
   }
   let samples = 20;
@@ -144,31 +234,36 @@ function parseOptions(args: readonly string[]): BenchmarkOptions {
 }
 
 async function run(options: BenchmarkOptions): Promise<void> {
+  if (!existsSync(options.binaryPath)) {
+    throw new Error(`Release binary not found: ${options.binaryPath}`);
+  }
   const startup: StartupSample[] = [];
   for (let sample = 1; sample <= options.samples; sample += 1) {
     startup.push(await measureStartup(options.binaryPath, sample));
   }
-  const idleWorkingSetMb = await measureIdleMemory(options.binaryPath, options.idleSeconds);
-  const startupValues = startup.map((sample) => sample.startupMs);
-  const startupP95 = percentile(startupValues, 95);
+  const measured = await measureBrowserAndIdle(options.binaryPath, options.idleSeconds);
+  const startupSummary = metricSummary(
+    startup.map((sample) => sample.startupMs),
+    startupLimitMs,
+  );
+  const documentOpen = metricSummary(measured.browser.documentOpenMs, documentOpenLimitMs);
+  const inputLatency = metricSummary(measured.browser.inputLatencyMs, inputLatencyLimitMs);
+  const idleMemory = {
+    value: measured.idleWorkingSetMb,
+    idleSeconds: options.idleSeconds,
+    limit: idleMemoryLimitMb,
+    passed: measured.idleWorkingSetMb < idleMemoryLimitMb,
+  };
   const summary = {
-    benchmark: "cairn-startup-and-idle-memory",
+    benchmark: "cairn-release-performance",
     measuredAt: new Date().toISOString(),
     binaryPath: options.binaryPath,
-    samples: startup,
-    startupMs: {
-      p50: percentile(startupValues, 50),
-      p95: startupP95,
-      maximum: Math.max(...startupValues),
-      limitP95: startupLimitMs,
-      passed: startupP95 <= startupLimitMs,
-    },
-    idleWorkingSetMb: {
-      value: idleWorkingSetMb,
-      idleSeconds: options.idleSeconds,
-      limit: idleMemoryLimitMb,
-      passed: idleWorkingSetMb < idleMemoryLimitMb,
-    },
+    startupRuns: startup,
+    startupMs: startupSummary,
+    documentOpenMs: documentOpen,
+    inputLatencyMs: inputLatency,
+    idleWorkingSetMb: idleMemory,
+    passed: startupSummary.passed && documentOpen.passed && inputLatency.passed && idleMemory.passed,
   };
 
   const serialized = `${JSON.stringify(summary, null, 2)}\n`;
@@ -177,9 +272,7 @@ async function run(options: BenchmarkOptions): Promise<void> {
     mkdirSync(dirname(options.outputPath), { recursive: true });
     writeFileSync(options.outputPath, serialized, "utf8");
   }
-  if (!summary.startupMs.passed || !summary.idleWorkingSetMb.passed) {
-    process.exitCode = 1;
-  }
+  if (!summary.passed) process.exitCode = 1;
 }
 
 await run(parseOptions(process.argv.slice(2)));
