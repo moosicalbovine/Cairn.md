@@ -26,6 +26,7 @@ import {
   importChosenMarkdownFiles,
   importDroppedFiles,
   listenForDroppedFiles,
+  type ImportBatchResult,
 } from "../import/importAdapters";
 import {
   addChosenTrackedFolder,
@@ -52,6 +53,13 @@ type WorkspaceProps = Readonly<{
 function askForName(message: string, defaultValue: string): string | null {
   const value = globalThis.prompt(message, defaultValue)?.trim();
   return value ? value : null;
+}
+
+function importNotice(result: ImportBatchResult): string | null {
+  if (result.failures.length === 0) return null;
+  const imported = `${result.imported.length} ${result.imported.length === 1 ? "file" : "files"} imported`;
+  const failed = `${result.failures.length} ${result.failures.length === 1 ? "file" : "files"} could not be imported`;
+  return `${imported}; ${failed}. ${result.failures[0]?.message ?? ""}`.trim();
 }
 
 export function Workspace({
@@ -128,7 +136,7 @@ export function Workspace({
       setNotice(null);
       void (async () => {
         try {
-          const imported = await importDroppedFiles(
+          const result = await importDroppedFiles(
             selectedProjectId,
             paths,
             importQueue.current,
@@ -138,8 +146,9 @@ export function Workspace({
             if (active) setSnapshot(nextSnapshot);
           });
           if (!active) return;
-          const latest = imported.at(-1);
+          const latest = result.imported.at(-1);
           if (latest) setSelectedDocumentId(latest.document.id);
+          setNotice(importNotice(result));
         } catch (reason) {
           if (active) {
             setNotice(reason instanceof Error ? reason.message : "Dropped files could not be imported.");
@@ -270,9 +279,10 @@ export function Workspace({
             onCollapse={() => setContentsVisible(false)}
             onImportFiles={() => void run(async () => {
               if (!selectedProject) return;
-              const imported = await importChosenMarkdownFiles(selectedProject.id, importQueue.current);
-              const latest = imported.at(-1);
+              const result = await importChosenMarkdownFiles(selectedProject.id, importQueue.current);
+              const latest = result.imported.at(-1);
               if (latest) await refresh(latest.document.id);
+              setNotice(importNotice(result));
             })}
             onCreateDocument={() => void run(async () => {
               if (!selectedProject) return;

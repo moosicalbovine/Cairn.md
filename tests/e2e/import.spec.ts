@@ -66,7 +66,11 @@ describe("the three import entry points", () => {
         relativePath: "Planning/tracked.md",
       },
     ]);
-    expect([picked[0]?.navigation, dropped[0]?.navigation, tracked.navigation]).toEqual([
+    expect([
+      picked.imported[0]?.navigation,
+      dropped.imported[0]?.navigation,
+      tracked.navigation,
+    ]).toEqual([
       { projectId: "project-1", documentId: "document-1", editorMode: "visual" },
       { projectId: "project-1", documentId: "document-2", editorMode: "visual" },
       { projectId: "project-1", documentId: "document-3", editorMode: "visual" },
@@ -79,8 +83,31 @@ describe("the three import entry points", () => {
 
     await expect(
       importChosenMarkdownFiles("project-1", new ImportQueue(importer)),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ imported: [], failures: [] });
     expect(importer).not.toHaveBeenCalled();
+  });
+
+  it("waits for a whole batch and reports successes beside individual failures", async () => {
+    const importer: Importer = vi.fn(async (_projectId, source) => {
+      const path = source.kind === "externalPath" ? source.absolutePath : source.relativePath;
+      if (path.endsWith("bad.md")) throw new Error("The file is not readable");
+      return document(path.endsWith("last.md") ? "last" : "first");
+    });
+
+    const result = await importDroppedFiles(
+      "project-1",
+      ["first.md", "bad.md", "last.md"],
+      new ImportQueue(importer),
+    );
+
+    expect(result.imported.map(({ document: item }) => item.id)).toEqual([
+      "first",
+      "last",
+    ]);
+    expect(result.failures).toEqual([
+      { absolutePath: "bad.md", message: "The file is not readable" },
+    ]);
+    expect(importer).toHaveBeenCalledTimes(3);
   });
 
   it("serializes imports and continues after an individual failure", async () => {

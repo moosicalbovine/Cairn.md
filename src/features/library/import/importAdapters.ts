@@ -4,6 +4,16 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { ImportSource } from "../../../lib/tauri/import";
 import { ImportQueue, type ImportSuccess } from "./ImportQueue";
 
+export type ImportFailure = Readonly<{
+  absolutePath: string;
+  message: string;
+}>;
+
+export type ImportBatchResult = Readonly<{
+  imported: readonly ImportSuccess[];
+  failures: readonly ImportFailure[];
+}>;
+
 export function externalFileSource(absolutePath: string): ImportSource {
   return { kind: "externalPath", absolutePath };
 }
@@ -29,11 +39,9 @@ export async function chooseTrackedFolder(): Promise<string | null> {
 export async function importChosenMarkdownFiles(
   projectId: string,
   queue: ImportQueue,
-): Promise<readonly ImportSuccess[]> {
+): Promise<ImportBatchResult> {
   const selected = await chooseMarkdownFiles();
-  return Promise.all(
-    selected.map((absolutePath) => queue.enqueue(projectId, externalFileSource(absolutePath))),
-  );
+  return importFileBatch(projectId, selected, queue);
 }
 
 export async function listenForDroppedFiles(
@@ -50,8 +58,36 @@ export function importDroppedFiles(
   projectId: string,
   paths: readonly string[],
   queue: ImportQueue,
-): Promise<readonly ImportSuccess[]> {
-  return Promise.all(
-    paths.map((absolutePath) => queue.enqueue(projectId, externalFileSource(absolutePath))),
+): Promise<ImportBatchResult> {
+  return importFileBatch(projectId, paths, queue);
+}
+
+async function importFileBatch(
+  projectId: string,
+  paths: readonly string[],
+  queue: ImportQueue,
+): Promise<ImportBatchResult> {
+  const settled = await Promise.allSettled(
+    paths.map((absolutePath) =>
+      queue.enqueue(projectId, externalFileSource(absolutePath)),
+    ),
   );
+  const imported: ImportSuccess[] = [];
+  const failures: ImportFailure[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      imported.push(result.value);
+      return;
+    }
+    const absolutePath = paths[index];
+    if (absolutePath === undefined) return;
+    failures.push({
+      absolutePath,
+      message:
+        result.reason instanceof Error
+          ? result.reason.message
+          : "The Markdown file could not be imported.",
+    });
+  });
+  return { imported, failures };
 }
