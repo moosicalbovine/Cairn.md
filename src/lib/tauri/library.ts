@@ -61,6 +61,11 @@ export type RelinkPreview = Readonly<{
   candidateManifest: string;
 }>;
 
+export type DeletedDocument = Readonly<{
+  recoveryPath: string | null;
+  recycled: boolean;
+}>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -240,6 +245,57 @@ export function watchLibraryReconciliation(
 
 export async function createProject(name: string): Promise<ProjectSnapshot> {
   return parseProject(await invoke<unknown>("create_project", { name }));
+}
+
+export async function renameProject(
+  projectId: string,
+  name: string,
+): Promise<ProjectSnapshot> {
+  return parseProject(
+    await invoke<unknown>("rename_project", { projectId, name }),
+  );
+}
+
+export async function createDocument(
+  projectId: string,
+  name: string,
+): Promise<DocumentSnapshot> {
+  return parseDocumentSnapshot(
+    await invoke<unknown>("create_document", { projectId, name }),
+  );
+}
+
+export async function renameDocument(
+  documentId: string,
+  name: string,
+): Promise<DocumentSnapshot> {
+  return parseDocumentSnapshot(
+    await invoke<unknown>("rename_document", { documentId, name }),
+  );
+}
+
+export async function moveDocument(
+  documentId: string,
+  targetProjectId: string,
+): Promise<DocumentSnapshot> {
+  return parseDocumentSnapshot(
+    await invoke<unknown>("move_document", { documentId, targetProjectId }),
+  );
+}
+
+export async function deleteDocument(documentId: string): Promise<DeletedDocument> {
+  const value = await invoke<unknown>("delete_document", { documentId });
+  if (
+    !isRecord(value) ||
+    !isStringOrNull(value.recoveryPath) ||
+    typeof value.recycled !== "boolean"
+  ) {
+    throw new Error("Invalid deleted document result");
+  }
+  return {
+    recoveryPath: value.recoveryPath,
+    recycled: value.recycled,
+  };
 }
 
 export async function readDocument(documentId: string): Promise<DocumentContent> {

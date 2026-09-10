@@ -1,50 +1,89 @@
 import { useEffect, useState } from "react";
 
+import { LibrarySetup } from "../features/library/components/LibrarySetup";
+import { Workspace } from "../features/library/components/Workspace";
+import {
+  applyAppearance,
+  loadAppearance,
+  storeAppearance,
+  type Appearance,
+} from "../features/settings/appearance/appearance";
+import { listTrackedFolders, type TrackedFolderSnapshot } from "../lib/tauri/import";
+import { loadLibraryIndex, type LibrarySnapshot } from "../lib/tauri/library";
 import { getHealth } from "../lib/tauri/health";
 import "./app.css";
 
-type ConnectionState = "checking" | "ready" | "unavailable";
+type BootState = "checking" | "ready" | "unavailable";
 
 export function App() {
-  const [connection, setConnection] = useState<ConnectionState>("checking");
+  const [boot, setBoot] = useState<BootState>("checking");
+  const [snapshot, setSnapshot] = useState<LibrarySnapshot | null>(null);
+  const [trackedFolders, setTrackedFolders] = useState<readonly TrackedFolderSnapshot[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [appearance, setAppearance] = useState<Appearance>(() =>
+    loadAppearance(globalThis.localStorage),
+  );
+
+  useEffect(() => {
+    applyAppearance(document.documentElement, appearance);
+    storeAppearance(globalThis.localStorage, appearance);
+  }, [appearance]);
 
   useEffect(() => {
     let active = true;
-
-    void getHealth().then(
-      () => active && setConnection("ready"),
-      () => active && setConnection("unavailable"),
-    );
-
+    void (async () => {
+      try {
+        await getHealth();
+        if (!active) return;
+        const library = await loadLibraryIndex((value) => {
+          if (active) setSnapshot(value);
+        });
+        const tracked = await listTrackedFolders();
+        if (!active) return;
+        setSnapshot(library);
+        setTrackedFolders(tracked);
+        setBoot("ready");
+      } catch (reason) {
+        if (!active) return;
+        setError(reason instanceof Error ? reason.message : "The desktop core did not respond.");
+        setBoot("unavailable");
+      }
+    })();
     return () => {
       active = false;
     };
   }, []);
 
-  return (
-    <main className="app-shell">
-      <header className="titlebar">
-        <div className="brand-mark" aria-hidden="true">
-          N
-        </div>
-        <div>
-          <p className="eyebrow">Local Markdown workspace</p>
-          <h1>Cairn.md</h1>
-        </div>
-      </header>
+  if (boot === "checking") {
+    return (
+      <main className="startup-screen" aria-live="polite">
+        <span className="setup-mark" aria-hidden="true">C</span>
+        <p>Opening your Markdown library…</p>
+      </main>
+    );
+  }
 
-      <section className="foundation-card" aria-labelledby="foundation-heading">
-        <p className="status-pill" data-state={connection}>
-          {connection === "checking" && "Starting locally…"}
-          {connection === "ready" && "Desktop core ready"}
-          {connection === "unavailable" && "Open with the Cairn.md desktop app"}
-        </p>
-        <h2 id="foundation-heading">Your Markdown library is taking shape.</h2>
-        <p>
-          Cairn.md runs on your PC and keeps portable Markdown files under your
-          control. Library setup arrives in the next implementation unit.
-        </p>
-      </section>
-    </main>
+  if (boot === "unavailable" || snapshot === null) {
+    return (
+      <main className="startup-screen">
+        <span className="setup-mark" aria-hidden="true">C</span>
+        <h1>Open Cairn.md as a desktop app</h1>
+        <p>{error ?? "The local desktop core is unavailable."}</p>
+      </main>
+    );
+  }
+
+  if (snapshot.binding === null) {
+    return <LibrarySetup onBound={setSnapshot} />;
+  }
+
+  return (
+    <Workspace
+      key={`${snapshot.binding.libraryId}:${snapshot.binding.generation}`}
+      initialSnapshot={snapshot}
+      initialTrackedFolders={trackedFolders}
+      appearance={appearance}
+      onAppearanceChange={setAppearance}
+    />
   );
 }
