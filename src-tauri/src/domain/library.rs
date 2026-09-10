@@ -310,7 +310,7 @@ impl LibraryService {
             "INSERT INTO libraries (id, root_path, root_identity, binding_generation, previous_root_path, manifest_json, updated_at) VALUES (?1, ?2, ?3, 1, NULL, ?4, ?5)",
             params![&library_id, path_text(&root_path), &root_identity, &manifest, now],
         ).map_err(LibraryError::database)?;
-        reconcile_transaction(&transaction, &library_id, &scanned, &manifest, now)?;
+        reconcile_transaction(&transaction, &library_id, &scanned, &manifest, now, false)?;
         transaction.commit().map_err(LibraryError::database)?;
         self.watcher = Some(watcher);
         self.mode = LibraryMode::Writable;
@@ -409,6 +409,7 @@ impl LibraryService {
             &scanned,
             &manifest,
             now_millis(),
+            true,
         )?;
         transaction.commit().map_err(LibraryError::database)?;
         self.watcher = Some(watcher);
@@ -1111,7 +1112,14 @@ impl LibraryService {
             .connection_mut()
             .transaction()
             .map_err(LibraryError::database)?;
-        reconcile_transaction(&transaction, &binding.library_id, scanned, &manifest, now)?;
+        reconcile_transaction(
+            &transaction,
+            &binding.library_id,
+            scanned,
+            &manifest,
+            now,
+            false,
+        )?;
         transaction.commit().map_err(LibraryError::database)
     }
 
@@ -1381,6 +1389,7 @@ fn reconcile_transaction(
     scanned: &[ScannedProject],
     manifest: &str,
     now: i64,
+    allow_confirmed_path_rebind: bool,
 ) -> Result<(), LibraryError> {
     let projects = load_existing_projects(transaction, library_id)?;
     let documents = load_existing_documents(transaction, library_id)?;
@@ -1412,10 +1421,11 @@ fn reconcile_transaction(
         if let Some(existing) = projects.iter().find(|row| {
             !used_projects.contains(&row.id)
                 && row.path_key == key
-                && identities_compatible(
-                    row.file_identity.as_ref(),
-                    candidate.file_identity.as_ref(),
-                )
+                && (allow_confirmed_path_rebind
+                    || identities_compatible(
+                        row.file_identity.as_ref(),
+                        candidate.file_identity.as_ref(),
+                    ))
         }) {
             project_ids[index] = Some(existing.id.clone());
             used_projects.insert(existing.id.clone());
@@ -1459,10 +1469,11 @@ fn reconcile_transaction(
         if let Some(existing) = documents.iter().find(|row| {
             !used_documents.contains(&row.id)
                 && row.path_key == key
-                && identities_compatible(
-                    row.file_identity.as_ref(),
-                    candidate.file_identity.as_ref(),
-                )
+                && (allow_confirmed_path_rebind
+                    || identities_compatible(
+                        row.file_identity.as_ref(),
+                        candidate.file_identity.as_ref(),
+                    ))
         }) {
             document_ids[index] = Some(existing.id.clone());
             used_documents.insert(existing.id.clone());

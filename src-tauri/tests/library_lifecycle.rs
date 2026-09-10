@@ -284,6 +284,31 @@ fn relocation_requires_confirmation_and_increments_only_the_binding_generation()
 }
 
 #[test]
+fn confirmed_copy_relocation_preserves_project_and_document_ids() {
+    let app_data = TempDir::new().unwrap();
+    let original = TempDir::new().unwrap();
+    let copied = TempDir::new().unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(original.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "note.md").unwrap();
+    fs::write(original.path().join("Alpha/note.md"), "portable").unwrap();
+    service.reconcile().unwrap();
+
+    fs::create_dir(copied.path().join("Alpha")).unwrap();
+    fs::copy(
+        original.path().join("Alpha/note.md"),
+        copied.path().join("Alpha/note.md"),
+    )
+    .unwrap();
+
+    let preview = service.preview_relink(copied.path()).unwrap();
+    let relinked = service.confirm_relink(preview).unwrap();
+    assert_eq!(relinked.projects[0].id, project.id);
+    assert_eq!(relinked.projects[0].documents[0].id, document.id);
+}
+
+#[test]
 fn failed_or_stale_relink_preserves_the_previous_binding() {
     let (_app_data, root, mut service) = service_and_root();
     let first = service.bind_root(root.path()).unwrap().binding.unwrap();
@@ -486,6 +511,38 @@ fn damaged_metadata_fails_closed_without_replacement() {
         "metadata_damaged"
     );
     assert_eq!(fs::read(database_path).unwrap(), damaged);
+    assert!(fs::read_dir(app_data.path().join("metadata-quarantine"))
+        .unwrap()
+        .next()
+        .is_some());
+}
+
+#[test]
+fn incompatible_interrupted_migration_fails_closed_with_evidence() {
+    let app_data = TempDir::new().unwrap();
+    let database_path = app_data.path().join("library.sqlite3");
+    let connection = rusqlite::Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch("CREATE VIEW libraries AS SELECT 1 AS id; PRAGMA user_version = 0;")
+        .unwrap();
+    drop(connection);
+
+    let service = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = service.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::ReadOnly);
+    assert_eq!(
+        snapshot.read_only_reason.as_deref(),
+        Some("metadata_damaged")
+    );
+    let preserved = rusqlite::Connection::open(&database_path).unwrap();
+    let object_type: String = preserved
+        .query_row(
+            "SELECT type FROM sqlite_master WHERE name = 'libraries'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(object_type, "view");
     assert!(fs::read_dir(app_data.path().join("metadata-quarantine"))
         .unwrap()
         .next()
