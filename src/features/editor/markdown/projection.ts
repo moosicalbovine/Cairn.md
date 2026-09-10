@@ -141,7 +141,17 @@ export function createMarkdownProjection(
     ];
   });
 
-  const grouped = rawSegments.reduce<Array<Omit<MarkdownProjectionSegment, "id">>>(
+  const editableSegments = rawSegments.length > 0
+    ? rawSegments
+    : [{
+        id: "",
+        kind: "visual" as const,
+        from: 0,
+        to: source.length,
+        source,
+        nodeType: "paragraph",
+      }];
+  const grouped = editableSegments.reduce<Array<Omit<MarkdownProjectionSegment, "id">>>(
     (segments, segment) => {
       const previous = segments.at(-1);
       if (previous?.kind === segment.kind) {

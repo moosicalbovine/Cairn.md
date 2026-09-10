@@ -152,6 +152,24 @@ describe("source-ranged visual projection", () => {
     expect(visual.projection.revision).toBe(1);
   });
 
+  it.each(["", "  \n\t"])("keeps blank Markdown editable in visual mode", (source) => {
+    const session = MarkdownSession.fromSource(source);
+    const visual = new VisualSession(session);
+
+    expect(visual.projection.segments).toEqual([
+      expect.objectContaining({
+        id: "visual:0",
+        kind: "visual",
+        from: 0,
+        to: source.length,
+        source,
+      }),
+    ]);
+
+    visual.replaceSegment("visual:0", "First note", 0);
+    expect(session.source).toBe("First note");
+  });
+
   it("reparses source edits to unsupported content", () => {
     const session = MarkdownSession.fromSource("Before.\n\n$$old$$\n\nAfter.\n");
     const visual = new VisualSession(session);
