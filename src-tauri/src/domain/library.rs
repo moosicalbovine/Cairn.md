@@ -9,9 +9,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::domain::import::{collision_name, ImportSource};
 use crate::domain::project::{
     document_relative_path, path_key, validate_document_name, validate_project_name,
     validate_relative_path,
+};
+use crate::infrastructure::copy::{
+    copy_stable_source, inspect_markdown_source, remove_owned_file, SourceDescriptor,
 };
 use crate::infrastructure::database::{Database, DatabaseOpen};
 use crate::infrastructure::filesystem::{
@@ -200,6 +204,16 @@ enum OperationPayload {
         relative_path: String,
         #[serde(default)]
         recovery_relative_path: Option<String>,
+    },
+    ImportDocument {
+        document_id: String,
+        project_id: String,
+        relative_path: String,
+        source_path: String,
+        source_resolved_path: PathBuf,
+        source_identity: String,
+        source_fingerprint: String,
+        imported_at: i64,
     },
 }
 
@@ -612,6 +626,118 @@ impl LibraryService {
             .ok_or_else(|| LibraryError::new("journal_incomplete", "Document was not committed"))
     }
 
+    pub fn import_document(
+        &mut self,
+        project_id: &str,
+        source: ImportSource,
+    ) -> Result<DocumentSnapshot, LibraryError> {
+        let binding = self.required_writable_binding()?;
+        let project = self.project_by_id(project_id)?;
+        self.verified_project_path(&binding, project_id, &project.relative_path)?;
+        let source = match source {
+            ImportSource::ExternalPath { absolute_path } => {
+                inspect_markdown_source(&absolute_path)?
+            }
+            ImportSource::TrackedFile { .. } => {
+                return Err(LibraryError::new(
+                    "tracked_folder_not_found",
+                    "Tracked folder imports are not configured yet",
+                ));
+            }
+        };
+        let original_name = source
+            .resolved_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| LibraryError::invalid_path("Source filename is invalid"))?;
+        validate_document_name(original_name)?;
+        let imported_at = now_millis();
+
+        for sequence in 1..=10_000 {
+            let name = collision_name(original_name, sequence)?;
+            let relative = document_relative_path(&project.relative_path, &name);
+            if self.document_destination_exists(&binding, &relative)? {
+                continue;
+            }
+            let operation_id = Uuid::new_v4().to_string();
+            let document_id = Uuid::new_v4().to_string();
+            let temporary_relative = document_relative_path(
+                &project.relative_path,
+                &format!(".cairn-import-{operation_id}.tmp"),
+            );
+            let payload = OperationPayload::ImportDocument {
+                document_id: document_id.clone(),
+                project_id: project_id.to_owned(),
+                relative_path: relative.clone(),
+                source_path: source.provenance_path.clone(),
+                source_resolved_path: source.resolved_path.clone(),
+                source_identity: source.identity.clone(),
+                source_fingerprint: source.fingerprint.clone(),
+                imported_at,
+            };
+            self.insert_operation(
+                &operation_id,
+                &binding.library_id,
+                "import_document",
+                &payload,
+                Some(&temporary_relative),
+                Some(&source.fingerprint),
+            )?;
+            let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
+            let copied = match copy_stable_source(&source, &temporary) {
+                Ok(copied) => copied,
+                Err(error) => {
+                    self.remove_operation(&operation_id)?;
+                    return Err(error);
+                }
+            };
+            self.update_operation(
+                &operation_id,
+                JournalPhase::TemporaryDurable,
+                None,
+                Some(&copied.identity),
+            )?;
+            self.verify_active_root(&binding)?;
+            self.verified_project_path(&binding, project_id, &project.relative_path)?;
+            let target = resolve_new(&binding.root_path, &relative)?;
+            match rename_no_replace(&temporary, &target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    remove_owned_file(&temporary, &copied.identity);
+                    self.finish_operation(&operation_id)?;
+                    continue;
+                }
+                Err(error) => return Err(LibraryError::io(error)),
+            }
+            sync_parent(&target)?;
+            let target_identity = file_identity(&target)?;
+            self.update_operation(
+                &operation_id,
+                JournalPhase::FilesystemFinalized,
+                Some(&copied.fingerprint),
+                target_identity.as_deref(),
+            )?;
+            self.insert_document_metadata(DocumentMetadataCommit {
+                operation_id: &operation_id,
+                document_id: &document_id,
+                library_id: &binding.library_id,
+                project_id,
+                relative_path: &relative,
+                target: &target,
+                disk_fingerprint: &copied.fingerprint,
+                source_path: Some(&source.provenance_path),
+                imported_at: Some(imported_at),
+            })?;
+            self.finish_operation(&operation_id)?;
+            return self.document_by_id(&document_id);
+        }
+
+        Err(LibraryError::new(
+            "destination_busy",
+            "Could not allocate an import filename",
+        ))
+    }
+
     pub fn create_document_interrupted_for_test(
         &mut self,
         project_id: &str,
@@ -944,6 +1070,8 @@ impl LibraryService {
             relative_path: &relative,
             target: &target,
             disk_fingerprint: &final_fingerprint,
+            source_path: None,
+            imported_at: None,
         })?;
         if stop_after == JournalPhase::MetadataCommitted {
             return Ok(Some(self.document_by_id(&document_id)?));
@@ -1183,6 +1311,130 @@ impl LibraryService {
                         relative_path: &relative_path,
                         target: &target,
                         disk_fingerprint: expected,
+                        source_path: None,
+                        imported_at: None,
+                    })?;
+                }
+                OperationPayload::ImportDocument {
+                    document_id,
+                    project_id,
+                    relative_path,
+                    source_path,
+                    source_resolved_path,
+                    source_identity,
+                    source_fingerprint,
+                    imported_at,
+                } => {
+                    validate_relative_path(&relative_path, 2)?;
+                    let temporary_relative = temporary_path.ok_or_else(|| {
+                        LibraryError::new(
+                            "journal_invalid",
+                            "Import operation has no temporary path",
+                        )
+                    })?;
+                    validate_relative_path(&temporary_relative, 2)?;
+                    if expected_fingerprint.as_deref() != Some(source_fingerprint.as_str()) {
+                        return Err(LibraryError::new(
+                            "journal_invalid",
+                            "Import source fingerprint does not match the journal",
+                        ));
+                    }
+                    let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
+                    let target = resolve_new(&binding.root_path, &relative_path)?;
+                    if phase == JournalPhase::FilesystemFinalized {
+                        verify_fingerprint(&target, &source_fingerprint)?;
+                        verify_expected_identity(
+                            &target,
+                            finalized_identity.as_deref(),
+                            "Finalized import target identity does not match the journal",
+                        )?;
+                    } else {
+                        match (temporary.exists(), target.exists()) {
+                            (false, false) => {
+                                let source = SourceDescriptor {
+                                    provenance_path: source_path.clone(),
+                                    resolved_path: source_resolved_path,
+                                    identity: source_identity,
+                                    fingerprint: source_fingerprint.clone(),
+                                };
+                                let copied = match copy_stable_source(&source, &temporary) {
+                                    Ok(copied) => copied,
+                                    Err(error)
+                                        if matches!(
+                                            error.code(),
+                                            "source_unavailable"
+                                                | "source_unreadable"
+                                                | "source_changed"
+                                        ) =>
+                                    {
+                                        self.remove_operation(&id)?;
+                                        continue;
+                                    }
+                                    Err(error) => return Err(error),
+                                };
+                                self.update_operation(
+                                    &id,
+                                    JournalPhase::TemporaryDurable,
+                                    None,
+                                    Some(&copied.identity),
+                                )?;
+                            }
+                            (true, false) => {
+                                verify_fingerprint(&temporary, &source_fingerprint)?;
+                                if let Some(expected_identity) = temporary_identity.as_deref() {
+                                    verify_expected_identity(
+                                        &temporary,
+                                        Some(expected_identity),
+                                        "Import temporary identity does not match the journal",
+                                    )?;
+                                } else {
+                                    self.update_operation(
+                                        &id,
+                                        JournalPhase::TemporaryDurable,
+                                        None,
+                                        file_identity(&temporary)?.as_deref(),
+                                    )?;
+                                }
+                            }
+                            (false, true) => {
+                                verify_fingerprint(&target, &source_fingerprint)?;
+                                verify_expected_identity(
+                                    &target,
+                                    temporary_identity.as_deref(),
+                                    "Unrecorded import target was not the durable temporary",
+                                )?;
+                            }
+                            (true, true) if same_filesystem_object(&temporary, &target)? => {
+                                verify_fingerprint(&temporary, &source_fingerprint)?;
+                                fs::remove_file(&temporary).map_err(LibraryError::io)?;
+                            }
+                            (true, true) => {
+                                return Err(journal_mismatch(
+                                    "Import temporary and target are different files",
+                                ));
+                            }
+                        }
+                        if !target.exists() {
+                            rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
+                            sync_parent(&target)?;
+                        }
+                        self.update_operation(
+                            &id,
+                            JournalPhase::FilesystemFinalized,
+                            Some(&source_fingerprint),
+                            file_identity(&target)?.as_deref(),
+                        )?;
+                    }
+                    self.insert_document_metadata(DocumentMetadataCommit {
+                        operation_id: &id,
+                        document_id: &document_id,
+                        library_id: &binding.library_id,
+                        project_id: &project_id,
+                        relative_path: &relative_path,
+                        target: &target,
+                        disk_fingerprint: &source_fingerprint,
+                        source_path: Some(&source_path),
+                        imported_at: Some(imported_at),
                     })?;
                 }
                 OperationPayload::MoveDocument {
@@ -1374,8 +1626,8 @@ impl LibraryService {
                     commit.project_id.to_owned(),
                     commit.relative_path.to_owned(),
                     expected_path_key.clone(),
-                    None,
-                    None,
+                    commit.source_path.map(str::to_owned),
+                    commit.imported_at,
                     commit.disk_fingerprint.to_owned(),
                     target_identity.clone(),
                 )
@@ -1386,8 +1638,8 @@ impl LibraryService {
             }
         } else {
             transaction.execute(
-                "INSERT INTO documents (id, library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, disk_revision, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 0, ?7, ?8, ?8)",
-                params![commit.document_id, commit.library_id, commit.project_id, commit.relative_path, expected_path_key, commit.disk_fingerprint, target_identity, now],
+                "INSERT INTO documents (id, library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, disk_revision, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, ?10)",
+                params![commit.document_id, commit.library_id, commit.project_id, commit.relative_path, expected_path_key, commit.source_path, commit.imported_at, commit.disk_fingerprint, target_identity, now],
             ).map_err(database_conflict)?;
         }
         transaction
@@ -1682,6 +1934,46 @@ impl LibraryService {
         )
     }
 
+    fn document_destination_exists(
+        &self,
+        binding: &LibraryBinding,
+        relative_path: &str,
+    ) -> Result<bool, LibraryError> {
+        let indexed = self
+            .require_metadata()?
+            .connection()
+            .query_row(
+                "SELECT 1 FROM documents WHERE library_id = ?1 AND path_key = ?2 LIMIT 1",
+                params![&binding.library_id, path_key(relative_path)],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(LibraryError::database)?
+            .is_some();
+        if indexed {
+            return Ok(true);
+        }
+        let target = resolve_new(&binding.root_path, relative_path)?;
+        let target_name = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| LibraryError::invalid_path("Import target filename is invalid"))?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| LibraryError::invalid_path("Import target has no project"))?;
+        for entry in fs::read_dir(parent).map_err(LibraryError::io)? {
+            let entry = entry.map_err(LibraryError::io)?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(target_name))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn require_metadata(&self) -> Result<&Database, LibraryError> {
         self.database.as_ref().ok_or_else(|| {
             LibraryError::new(
@@ -1754,6 +2046,8 @@ struct DocumentMetadataCommit<'a> {
     relative_path: &'a str,
     target: &'a Path,
     disk_fingerprint: &'a str,
+    source_path: Option<&'a str>,
+    imported_at: Option<i64>,
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {

@@ -71,6 +71,7 @@ pub fn run() {
             commands::library::rename_document,
             commands::library::move_document,
             commands::library::delete_document,
+            commands::import::import_markdown,
         ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");
