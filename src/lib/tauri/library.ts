@@ -139,13 +139,45 @@ export function parseLibrarySnapshot(value: unknown): LibrarySnapshot {
 }
 
 export async function loadLibraryIndex(
-  renderCached: (snapshot: LibrarySnapshot) => void,
+  renderSnapshot: (snapshot: LibrarySnapshot) => void,
 ): Promise<LibrarySnapshot> {
   const cached = parseLibrarySnapshot(await invoke<unknown>("library_snapshot"));
-  renderCached(cached);
+  renderSnapshot(cached);
   const reconciled = parseLibrarySnapshot(await invoke<unknown>("reconcile_library"));
-  renderCached(reconciled);
+  renderSnapshot(reconciled);
   return reconciled;
+}
+
+export function watchLibraryReconciliation(
+  onSnapshot: (snapshot: LibrarySnapshot) => void,
+  onError: (error: unknown) => void = () => undefined,
+  intervalMs = 300,
+): () => void {
+  let stopped = false;
+  let running = false;
+
+  const poll = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    try {
+      const value = await invoke<unknown>("reconcile_library_if_requested");
+      if (value !== null) {
+        onSnapshot(parseLibrarySnapshot(value));
+      }
+    } catch (error) {
+      onError(error);
+    } finally {
+      running = false;
+    }
+  };
+
+  const timer = globalThis.setInterval(() => void poll(), intervalMs);
+  return () => {
+    stopped = true;
+    globalThis.clearInterval(timer);
+  };
 }
 
 export async function createProject(name: string): Promise<ProjectSnapshot> {

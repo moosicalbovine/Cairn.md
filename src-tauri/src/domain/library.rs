@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,12 +11,13 @@ use uuid::Uuid;
 
 use crate::domain::project::{
     document_relative_path, path_key, validate_document_name, validate_project_name,
+    validate_relative_path,
 };
 use crate::infrastructure::database::{Database, DatabaseOpen};
 use crate::infrastructure::filesystem::{
-    case_aware_rename, file_identity, fingerprint, probe_candidate, rename_no_replace,
-    resolve_existing, resolve_new, scan, sync_parent, write_durable, CandidateRootProbe,
-    ScannedDocument, ScannedProject,
+    case_aware_rename, file_identity, fingerprint, probe_candidate, recycle_file,
+    rename_no_replace, resolve_existing, resolve_new, scan, sync_parent, write_durable,
+    CandidateRootProbe, ScannedDocument, ScannedProject,
 };
 use crate::infrastructure::watcher::{LibraryWatcher, WatcherHints};
 
@@ -120,12 +122,14 @@ pub struct RelinkPreview {
     pub root_identity: String,
     pub matched_projects: usize,
     pub matched_documents: usize,
+    pub candidate_manifest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletedDocument {
-    pub recovery_path: PathBuf,
+    pub recovery_path: Option<PathBuf>,
+    pub recycled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,15 +175,33 @@ impl JournalPhase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum OperationPayload {
+    CreateProject {
+        project_id: String,
+        relative_path: String,
+    },
+    RenameProject {
+        project_id: String,
+        from_relative_path: String,
+        to_relative_path: String,
+    },
     CreateDocument {
         document_id: String,
         project_id: String,
         relative_path: String,
     },
+    MoveDocument {
+        document_id: String,
+        target_project_id: String,
+        from_relative_path: String,
+        to_relative_path: String,
+    },
+    DeleteDocument {
+        document_id: String,
+        relative_path: String,
+    },
 }
 
 pub struct LibraryService {
-    app_data_dir: PathBuf,
     database: Option<Database>,
     mode: LibraryMode,
     read_only_reason: Option<String>,
@@ -202,7 +224,6 @@ impl LibraryService {
             }
         };
         let mut service = Self {
-            app_data_dir,
             database,
             mode,
             read_only_reason,
@@ -211,13 +232,28 @@ impl LibraryService {
         };
 
         if service.database.is_some() {
-            service.replay_pending_operations()?;
-            if let Some(binding) = service.binding()? {
-                if binding.root_path.is_dir() {
-                    service.restart_watcher(&binding.root_path)?;
-                } else {
-                    service.mode = LibraryMode::ReadOnly;
-                    service.read_only_reason = Some("root_unavailable".to_owned());
+            if let Err(error) = service.replay_pending_operations() {
+                log::error!("Cairn.md journal replay failed: {error}");
+                service.enter_read_only("journal_recovery_failed");
+                service.preserve_metadata_evidence();
+                return Ok(service);
+            }
+            match service.binding() {
+                Ok(Some(binding)) => match probe_candidate(&binding.root_path) {
+                    Ok(probe) if probe.can_bind => {
+                        if let Err(error) = service.restart_watcher(&binding.root_path) {
+                            log::error!("Cairn.md watcher startup failed: {error}");
+                            service.enter_read_only("watcher_unavailable");
+                            service.preserve_metadata_evidence();
+                        }
+                    }
+                    Ok(_) | Err(_) => service.enter_read_only("root_capability_lost"),
+                },
+                Ok(None) => {}
+                Err(error) => {
+                    log::error!("Cairn.md binding read failed: {error}");
+                    service.enter_read_only("metadata_damaged");
+                    service.preserve_metadata_evidence();
                 }
             }
         }
@@ -246,16 +282,24 @@ impl LibraryService {
             .ok_or_else(|| LibraryError::new("root_unavailable", "Root identity unavailable"))?;
         let root_path = probe.candidate_path;
         let library_id = Uuid::new_v4().to_string();
-        let manifest = inventory_manifest(&scan(&root_path)?);
+        let scanned = scan(&root_path)?;
+        let manifest = inventory_manifest(&scanned);
+        let watcher = LibraryWatcher::start(&root_path, self.watcher_hints.clone())?;
         let now = now_millis();
-        self.database_mut()?.connection_mut().execute(
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        transaction.execute(
             "INSERT INTO libraries (id, root_path, root_identity, binding_generation, previous_root_path, manifest_json, updated_at) VALUES (?1, ?2, ?3, 1, NULL, ?4, ?5)",
-            params![library_id, path_text(&root_path), root_identity, manifest, now],
+            params![&library_id, path_text(&root_path), &root_identity, &manifest, now],
         ).map_err(LibraryError::database)?;
+        reconcile_transaction(&transaction, &library_id, &scanned, &manifest, now)?;
+        transaction.commit().map_err(LibraryError::database)?;
+        self.watcher = Some(watcher);
         self.mode = LibraryMode::Writable;
         self.read_only_reason = None;
-        self.reconcile()?;
-        self.restart_watcher(&root_path)?;
         self.snapshot()
     }
 
@@ -291,14 +335,16 @@ impl LibraryService {
                     })
             })
             .count();
+        let candidate_manifest = inventory_manifest(&scanned);
         Ok(RelinkPreview {
             candidate_path: probe.candidate_path,
             library_id: binding.library_id,
             expected_generation: binding.generation,
-            expected_state_token: state_token(&snapshot),
+            expected_state_token: relink_state_token(&snapshot, &candidate_manifest),
             root_identity: probe.root_identity.unwrap_or_default(),
             matched_projects,
             matched_documents,
+            candidate_manifest,
         })
     }
 
@@ -312,7 +358,8 @@ impl LibraryService {
             .ok_or_else(|| LibraryError::new("library_not_bound", "No library is bound"))?;
         if binding.library_id != preview.library_id
             || binding.generation != preview.expected_generation
-            || state_token(&self.snapshot()?) != preview.expected_state_token
+            || relink_state_token(&self.snapshot()?, &preview.candidate_manifest)
+                != preview.expected_state_token
         {
             return Err(LibraryError::new(
                 "stale_relink",
@@ -321,23 +368,37 @@ impl LibraryService {
         }
         let fresh = self.preview_relink(&preview.candidate_path)?;
         if fresh.root_identity != preview.root_identity
-            || fresh.matched_projects != preview.matched_projects
-            || fresh.matched_documents != preview.matched_documents
+            || fresh.expected_state_token != preview.expected_state_token
+            || fresh.candidate_manifest != preview.candidate_manifest
         {
             return Err(LibraryError::new(
                 "stale_relink",
                 "The candidate changed after the relink preview",
             ));
         }
-        let manifest = inventory_manifest(&scan(&preview.candidate_path)?);
-        self.database_mut()?.connection_mut().execute(
+        let scanned = scan(&preview.candidate_path)?;
+        let manifest = inventory_manifest(&scanned);
+        let watcher = LibraryWatcher::start(&preview.candidate_path, self.watcher_hints.clone())?;
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        transaction.execute(
             "UPDATE libraries SET previous_root_path = root_path, root_path = ?1, root_identity = ?2, binding_generation = binding_generation + 1, manifest_json = ?3, updated_at = ?4 WHERE id = ?5",
-            params![path_text(&preview.candidate_path), preview.root_identity, manifest, now_millis(), preview.library_id],
+            params![path_text(&preview.candidate_path), &preview.root_identity, &manifest, now_millis(), &preview.library_id],
         ).map_err(LibraryError::database)?;
+        reconcile_transaction(
+            &transaction,
+            &preview.library_id,
+            &scanned,
+            &manifest,
+            now_millis(),
+        )?;
+        transaction.commit().map_err(LibraryError::database)?;
+        self.watcher = Some(watcher);
         self.mode = LibraryMode::Writable;
         self.read_only_reason = None;
-        self.restart_watcher(&preview.candidate_path)?;
-        self.reconcile()?;
         self.snapshot()
     }
 
@@ -409,17 +470,30 @@ impl LibraryService {
         let binding = self.required_binding()?;
         self.ensure_project_path_available(&binding.library_id, &name, None)?;
         let target = resolve_new(&binding.root_path, &name)?;
+        let id = Uuid::new_v4().to_string();
+        let operation_id = Uuid::new_v4().to_string();
+        let payload = OperationPayload::CreateProject {
+            project_id: id.clone(),
+            relative_path: name.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "create_project",
+            &payload,
+            None,
+            None,
+        )?;
         fs::create_dir(&target).map_err(map_conflict_io)?;
         sync_parent(&target)?;
-        let id = Uuid::new_v4().to_string();
+        self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         let identity = file_identity(&target)?;
-        if let Err(error) = self.database_mut()?.connection_mut().execute(
+        self.database_mut()?.connection_mut().execute(
             "INSERT INTO projects (id, library_id, relative_path, path_key, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            params![id, binding.library_id, name, path_key(&name), identity, now_millis()],
-        ) {
-            let _ = fs::remove_dir(&target);
-            return Err(database_conflict(error));
-        }
+            params![&id, &binding.library_id, &name, path_key(&name), identity, now_millis()],
+        ).map_err(database_conflict)?;
+        self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
+        self.finish_operation(&operation_id)?;
         self.project_by_id(&id)
     }
 
@@ -434,9 +508,24 @@ impl LibraryService {
         let project = self.project_by_id(project_id)?;
         self.ensure_project_path_available(&binding.library_id, &name, Some(project_id))?;
         let source = resolve_existing(&binding.root_path, &project.relative_path)?;
-        let target = binding.root_path.join(&name);
-        case_aware_rename(&source, &target, &Uuid::new_v4().to_string())
-            .map_err(map_conflict_io)?;
+        validate_relative_path(&project.relative_path, 1)?;
+        let target = resolve_new(&binding.root_path, &name)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let payload = OperationPayload::RenameProject {
+            project_id: project_id.to_owned(),
+            from_relative_path: project.relative_path.clone(),
+            to_relative_path: name.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "rename_project",
+            &payload,
+            None,
+            None,
+        )?;
+        case_aware_rename(&source, &target, &operation_id).map_err(map_conflict_io)?;
+        self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         let identity = file_identity(&target)?;
         let transaction = self
             .database_mut()?
@@ -470,6 +559,8 @@ impl LibraryService {
             ).map_err(database_conflict)?;
         }
         transaction.commit().map_err(LibraryError::database)?;
+        self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
+        self.finish_operation(&operation_id)?;
         self.project_by_id(project_id)
     }
 
@@ -478,7 +569,7 @@ impl LibraryService {
         project_id: &str,
         name: &str,
     ) -> Result<DocumentSnapshot, LibraryError> {
-        self.create_document_through_phase(project_id, name, JournalPhase::CleanupComplete)?
+        self.create_document_through_phase(project_id, name, JournalPhase::CleanupComplete, false)?
             .ok_or_else(|| LibraryError::new("journal_incomplete", "Document was not committed"))
     }
 
@@ -488,7 +579,21 @@ impl LibraryService {
         name: &str,
         stop_after: JournalPhase,
     ) -> Result<(), LibraryError> {
-        self.create_document_through_phase(project_id, name, stop_after)?;
+        self.create_document_through_phase(project_id, name, stop_after, false)?;
+        Ok(())
+    }
+
+    pub fn create_document_interrupted_after_finalize_before_phase_for_test(
+        &mut self,
+        project_id: &str,
+        name: &str,
+    ) -> Result<(), LibraryError> {
+        self.create_document_through_phase(
+            project_id,
+            name,
+            JournalPhase::FilesystemFinalized,
+            true,
+        )?;
         Ok(())
     }
 
@@ -502,18 +607,40 @@ impl LibraryService {
         let binding = self.required_binding()?;
         let document = self.document_by_id(document_id)?;
         let project = self.project_for_document(document_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
+        validate_relative_path(&project.relative_path, 1)?;
         let relative = document_relative_path(&project.relative_path, &name);
         self.ensure_document_path_available(&binding.library_id, &relative, Some(document_id))?;
         let source = resolve_existing(&binding.root_path, &document.relative_path)?;
-        let target = binding
-            .root_path
-            .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
-        case_aware_rename(&source, &target, &Uuid::new_v4().to_string())
-            .map_err(map_conflict_io)?;
+        let target = resolve_new(&binding.root_path, &relative)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let expected = fingerprint(&source)?;
+        let payload = OperationPayload::MoveDocument {
+            document_id: document_id.to_owned(),
+            target_project_id: project.id.clone(),
+            from_relative_path: document.relative_path.clone(),
+            to_relative_path: relative.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "rename_document",
+            &payload,
+            None,
+            Some(&expected),
+        )?;
+        case_aware_rename(&source, &target, &operation_id).map_err(map_conflict_io)?;
+        self.update_operation(
+            &operation_id,
+            JournalPhase::FilesystemFinalized,
+            Some(&expected),
+        )?;
         self.database_mut()?.connection_mut().execute(
             "UPDATE documents SET relative_path = ?1, path_key = ?2, file_identity = ?3, disk_fingerprint = ?4, updated_at = ?5 WHERE id = ?6",
             params![relative, path_key(&relative), file_identity(&target)?, fingerprint(&target)?, now_millis(), document_id],
         ).map_err(database_conflict)?;
+        self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
+        self.finish_operation(&operation_id)?;
         self.document_by_id(document_id)
     }
 
@@ -526,6 +653,8 @@ impl LibraryService {
         let binding = self.required_binding()?;
         let document = self.document_by_id(document_id)?;
         let target_project = self.project_by_id(target_project_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
+        validate_relative_path(&target_project.relative_path, 1)?;
         let name = Path::new(&document.relative_path)
             .file_name()
             .and_then(|value| value.to_str())
@@ -534,12 +663,35 @@ impl LibraryService {
         self.ensure_document_path_available(&binding.library_id, &relative, Some(document_id))?;
         let source = resolve_existing(&binding.root_path, &document.relative_path)?;
         let target = resolve_new(&binding.root_path, &relative)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let expected = fingerprint(&source)?;
+        let payload = OperationPayload::MoveDocument {
+            document_id: document_id.to_owned(),
+            target_project_id: target_project_id.to_owned(),
+            from_relative_path: document.relative_path.clone(),
+            to_relative_path: relative.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "move_document",
+            &payload,
+            None,
+            Some(&expected),
+        )?;
         rename_no_replace(&source, &target).map_err(map_conflict_io)?;
         sync_parent(&target)?;
+        self.update_operation(
+            &operation_id,
+            JournalPhase::FilesystemFinalized,
+            Some(&expected),
+        )?;
         self.database_mut()?.connection_mut().execute(
             "UPDATE documents SET project_id = ?1, relative_path = ?2, path_key = ?3, file_identity = ?4, updated_at = ?5 WHERE id = ?6",
             params![target_project_id, relative, path_key(&relative), file_identity(&target)?, now_millis(), document_id],
         ).map_err(database_conflict)?;
+        self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
+        self.finish_operation(&operation_id)?;
         self.document_by_id(document_id)
     }
 
@@ -547,23 +699,34 @@ impl LibraryService {
         self.require_writable()?;
         let binding = self.required_binding()?;
         let document = self.document_by_id(document_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
         let source = resolve_existing(&binding.root_path, &document.relative_path)?;
-        let recovery_directory = self
-            .app_data_dir
-            .join("recoverable-deletions")
-            .join(Uuid::new_v4().to_string());
-        fs::create_dir_all(&recovery_directory).map_err(LibraryError::io)?;
-        let recovery_path = recovery_directory.join(
-            source
-                .file_name()
-                .ok_or_else(|| LibraryError::invalid_path("Document path is invalid"))?,
-        );
-        rename_no_replace(&source, &recovery_path).map_err(map_conflict_io)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let expected = fingerprint(&source)?;
+        let payload = OperationPayload::DeleteDocument {
+            document_id: document_id.to_owned(),
+            relative_path: document.relative_path.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "delete_document",
+            &payload,
+            None,
+            Some(&expected),
+        )?;
+        let recovery_path = recycle_file(&source)?;
+        self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         self.database_mut()?
             .connection_mut()
             .execute("DELETE FROM documents WHERE id = ?1", [document_id])
             .map_err(LibraryError::database)?;
-        Ok(DeletedDocument { recovery_path })
+        self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
+        self.finish_operation(&operation_id)?;
+        Ok(DeletedDocument {
+            recovery_path,
+            recycled: true,
+        })
     }
 
     pub fn reconcile(&mut self) -> Result<LibrarySnapshot, LibraryError> {
@@ -603,6 +766,7 @@ impl LibraryService {
         project_id: &str,
         name: &str,
         stop_after: JournalPhase,
+        stop_before_finalize_record: bool,
     ) -> Result<Option<DocumentSnapshot>, LibraryError> {
         self.require_writable()?;
         let name = validate_document_name(name)?;
@@ -624,19 +788,17 @@ impl LibraryService {
         self.insert_operation(
             &operation_id,
             &binding.library_id,
+            "create_document",
             &payload,
-            &temporary_relative,
+            Some(&temporary_relative),
+            Some("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
         )?;
         if stop_after == JournalPhase::IntentRecorded {
             return Ok(None);
         }
         let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
         write_durable(&temporary, b"")?;
-        self.update_operation(
-            &operation_id,
-            JournalPhase::TemporaryDurable,
-            Some("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        )?;
+        self.update_operation(&operation_id, JournalPhase::TemporaryDurable, None)?;
         if stop_after == JournalPhase::TemporaryDurable {
             return Ok(None);
         }
@@ -644,6 +806,9 @@ impl LibraryService {
         rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
         sync_parent(&target)?;
         let final_fingerprint = fingerprint(&target)?;
+        if stop_before_finalize_record {
+            return Ok(None);
+        }
         self.update_operation(
             &operation_id,
             JournalPhase::FilesystemFinalized,
@@ -678,7 +843,7 @@ impl LibraryService {
         let operations = {
             let database = self.require_metadata()?;
             let mut statement = database.connection().prepare(
-                "SELECT id, phase, payload_json, temporary_path, finalized_fingerprint FROM pending_file_operations ORDER BY created_at, id",
+                "SELECT id, phase, payload_json, temporary_path, expected_fingerprint FROM pending_file_operations ORDER BY created_at, id",
             ).map_err(LibraryError::database)?;
             let rows = statement
                 .query_map([], |row| {
@@ -696,55 +861,139 @@ impl LibraryService {
             rows
         };
         for (id, phase_text, payload_json, temporary_path, expected_fingerprint) in operations {
-            let phase = JournalPhase::parse(&phase_text)?;
+            let _phase = JournalPhase::parse(&phase_text)?;
             let payload: OperationPayload = serde_json::from_str(&payload_json)
                 .map_err(|error| LibraryError::new("journal_invalid", error.to_string()))?;
-            match (phase, payload) {
-                (
-                    JournalPhase::FilesystemFinalized | JournalPhase::MetadataCommitted,
-                    OperationPayload::CreateDocument {
-                        document_id,
-                        project_id,
-                        relative_path,
-                    },
-                ) => {
-                    let target = resolve_existing(&binding.root_path, &relative_path)?;
-                    let actual = fingerprint(&target)?;
-                    if expected_fingerprint
-                        .as_deref()
-                        .is_some_and(|value| value != actual)
-                    {
-                        return Err(LibraryError::new(
-                            "journal_mismatch",
-                            "Finalized document fingerprint no longer matches the journal",
-                        ));
+            match payload {
+                OperationPayload::CreateProject {
+                    project_id,
+                    relative_path,
+                } => {
+                    validate_relative_path(&relative_path, 1)?;
+                    let target = resolve_new(&binding.root_path, &relative_path)?;
+                    if !target.exists() {
+                        fs::create_dir(&target).map_err(map_conflict_io)?;
+                        sync_parent(&target)?;
                     }
-                    if phase == JournalPhase::FilesystemFinalized {
-                        self.insert_document_metadata(
-                            &document_id,
-                            &binding.library_id,
-                            &project_id,
-                            &relative_path,
-                            &target,
-                            &actual,
-                        )?;
+                    if !target.is_dir() {
+                        return Err(journal_mismatch("Project target is not a directory"));
                     }
-                    self.finish_operation(&id)?;
+                    self.database_mut()?.connection_mut().execute(
+                        "INSERT OR IGNORE INTO projects (id, library_id, relative_path, path_key, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                        params![project_id, binding.library_id, relative_path, path_key(&relative_path), file_identity(&target)?, now_millis()],
+                    ).map_err(database_conflict)?;
                 }
-                (JournalPhase::IntentRecorded | JournalPhase::TemporaryDurable, _) => {
-                    if let Some(relative) = temporary_path {
-                        if let Ok(path) = resolve_existing(&binding.root_path, &relative) {
-                            if expected_fingerprint.as_deref().is_none_or(|value| {
-                                fingerprint(&path).ok().as_deref() == Some(value)
-                            }) {
-                                let _ = fs::remove_file(path);
-                            }
+                OperationPayload::RenameProject {
+                    project_id,
+                    from_relative_path,
+                    to_relative_path,
+                } => {
+                    validate_relative_path(&from_relative_path, 1)?;
+                    validate_relative_path(&to_relative_path, 1)?;
+                    replay_move(
+                        &binding.root_path,
+                        &from_relative_path,
+                        &to_relative_path,
+                        &id,
+                        None,
+                    )?;
+                    let target = resolve_existing(&binding.root_path, &to_relative_path)?;
+                    update_project_metadata(
+                        self.database_mut()?.connection_mut(),
+                        &project_id,
+                        &to_relative_path,
+                        file_identity(&target)?,
+                    )?;
+                }
+                OperationPayload::CreateDocument {
+                    document_id,
+                    project_id,
+                    relative_path,
+                } => {
+                    validate_relative_path(&relative_path, 2)?;
+                    let temporary_relative = temporary_path.ok_or_else(|| {
+                        LibraryError::new(
+                            "journal_invalid",
+                            "Create operation has no temporary path",
+                        )
+                    })?;
+                    validate_relative_path(&temporary_relative, 2)?;
+                    let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
+                    let target = resolve_new(&binding.root_path, &relative_path)?;
+                    let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Create operation has no fingerprint")
+                    })?;
+                    match (temporary.exists(), target.exists()) {
+                        (false, false) => write_durable(&temporary, b"")?,
+                        (true, false) => verify_fingerprint(&temporary, expected)?,
+                        (false, true) => {}
+                        (true, true) => {
+                            return Err(journal_mismatch(
+                                "Both temporary and final documents exist",
+                            ));
                         }
                     }
-                    self.finish_operation(&id)?;
+                    if !target.exists() {
+                        rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
+                        sync_parent(&target)?;
+                    }
+                    verify_fingerprint(&target, expected)?;
+                    self.insert_document_metadata(
+                        &document_id,
+                        &binding.library_id,
+                        &project_id,
+                        &relative_path,
+                        &target,
+                        expected,
+                    )?;
                 }
-                (JournalPhase::CleanupComplete, _) => self.finish_operation(&id)?,
+                OperationPayload::MoveDocument {
+                    document_id,
+                    target_project_id,
+                    from_relative_path,
+                    to_relative_path,
+                } => {
+                    validate_relative_path(&from_relative_path, 2)?;
+                    validate_relative_path(&to_relative_path, 2)?;
+                    let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Move operation has no fingerprint")
+                    })?;
+                    replay_move(
+                        &binding.root_path,
+                        &from_relative_path,
+                        &to_relative_path,
+                        &id,
+                        Some(expected),
+                    )?;
+                    let target = resolve_existing(&binding.root_path, &to_relative_path)?;
+                    self.database_mut()?.connection_mut().execute(
+                        "UPDATE documents SET project_id = ?1, relative_path = ?2, path_key = ?3, file_identity = ?4, disk_fingerprint = ?5, updated_at = ?6 WHERE id = ?7",
+                        params![target_project_id, to_relative_path, path_key(&to_relative_path), file_identity(&target)?, expected, now_millis(), document_id],
+                    ).map_err(database_conflict)?;
+                }
+                OperationPayload::DeleteDocument {
+                    document_id,
+                    relative_path,
+                } => {
+                    validate_relative_path(&relative_path, 2)?;
+                    let source = resolve_new(&binding.root_path, &relative_path)?;
+                    if source.exists() {
+                        let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                            LibraryError::new(
+                                "journal_invalid",
+                                "Delete operation has no fingerprint",
+                            )
+                        })?;
+                        verify_fingerprint(&source, expected)?;
+                        recycle_file(&source)?;
+                    }
+                    self.database_mut()?
+                        .connection_mut()
+                        .execute("DELETE FROM documents WHERE id = ?1", [&document_id])
+                        .map_err(LibraryError::database)?;
+                }
             }
+            self.finish_operation(&id)?;
         }
         Ok(())
     }
@@ -755,64 +1004,13 @@ impl LibraryService {
         scanned: &[ScannedProject],
     ) -> Result<(), LibraryError> {
         let now = now_millis();
+        let manifest = inventory_manifest(scanned);
         let transaction = self
             .database_mut()?
             .connection_mut()
             .transaction()
             .map_err(LibraryError::database)?;
-        let existing_projects = load_existing_projects(&transaction, &binding.library_id)?;
-        let mut seen_projects = Vec::new();
-        let mut seen_documents = Vec::new();
-        for scanned_project in scanned {
-            let project_key = path_key(&scanned_project.relative_path);
-            let matched_project = existing_projects
-                .iter()
-                .find(|project| project.path_key == project_key)
-                .or_else(|| unique_project_identity(&existing_projects, scanned_project));
-            let project_id = matched_project
-                .map(|project| project.id.clone())
-                .unwrap_or_else(|| Uuid::new_v4().to_string());
-            transaction.execute(
-                "INSERT INTO projects (id, library_id, relative_path, path_key, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) ON CONFLICT(id) DO UPDATE SET relative_path = excluded.relative_path, path_key = excluded.path_key, file_identity = excluded.file_identity, updated_at = excluded.updated_at",
-                params![project_id, binding.library_id, scanned_project.relative_path, project_key, scanned_project.file_identity, now],
-            ).map_err(database_conflict)?;
-            seen_projects.push(project_id.clone());
-            let existing_documents = load_existing_documents(&transaction, &binding.library_id)?;
-            for scanned_document in &scanned_project.documents {
-                let document_key = path_key(&scanned_document.relative_path);
-                let matched_document = existing_documents
-                    .iter()
-                    .find(|document| document.path_key == document_key)
-                    .or_else(|| unique_document_identity(&existing_documents, scanned_document));
-                let document_id = matched_document
-                    .map(|document| document.id.clone())
-                    .unwrap_or_else(|| Uuid::new_v4().to_string());
-                transaction.execute(
-                    "INSERT INTO documents (id, library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, disk_revision, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 0, ?7, ?8, ?8) ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, relative_path = excluded.relative_path, path_key = excluded.path_key, disk_fingerprint = excluded.disk_fingerprint, file_identity = excluded.file_identity, updated_at = excluded.updated_at",
-                    params![document_id, binding.library_id, project_id, scanned_document.relative_path, document_key, scanned_document.fingerprint, scanned_document.file_identity, now],
-                ).map_err(database_conflict)?;
-                seen_documents.push(document_id);
-            }
-        }
-        delete_unseen(
-            &transaction,
-            "documents",
-            &binding.library_id,
-            &seen_documents,
-        )?;
-        delete_unseen(
-            &transaction,
-            "projects",
-            &binding.library_id,
-            &seen_projects,
-        )?;
-        let manifest = inventory_manifest(scanned);
-        transaction
-            .execute(
-                "UPDATE libraries SET manifest_json = ?1, updated_at = ?2 WHERE id = ?3",
-                params![manifest, now, binding.library_id],
-            )
-            .map_err(LibraryError::database)?;
+        reconcile_transaction(&transaction, &binding.library_id, scanned, &manifest, now)?;
         transaction.commit().map_err(LibraryError::database)
     }
 
@@ -836,14 +1034,16 @@ impl LibraryService {
         &mut self,
         id: &str,
         library_id: &str,
+        kind: &str,
         payload: &OperationPayload,
-        temporary_path: &str,
+        temporary_path: Option<&str>,
+        expected_fingerprint: Option<&str>,
     ) -> Result<(), LibraryError> {
         let payload = serde_json::to_string(payload)
             .map_err(|error| LibraryError::new("journal_invalid", error.to_string()))?;
         self.database_mut()?.connection_mut().execute(
-            "INSERT INTO pending_file_operations (id, library_id, kind, phase, payload_json, expected_fingerprint, finalized_fingerprint, temporary_path, created_at, updated_at) VALUES (?1, ?2, 'create_document', ?3, ?4, NULL, NULL, ?5, ?6, ?6)",
-            params![id, library_id, JournalPhase::IntentRecorded.as_str(), payload, temporary_path, now_millis()],
+            "INSERT INTO pending_file_operations (id, library_id, kind, phase, payload_json, expected_fingerprint, finalized_fingerprint, temporary_path, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?8)",
+            params![id, library_id, kind, JournalPhase::IntentRecorded.as_str(), payload, expected_fingerprint, temporary_path, now_millis()],
         ).map_err(LibraryError::database)?;
         Ok(())
     }
@@ -855,7 +1055,7 @@ impl LibraryService {
         fingerprint: Option<&str>,
     ) -> Result<(), LibraryError> {
         self.database_mut()?.connection_mut().execute(
-            "UPDATE pending_file_operations SET phase = ?1, expected_fingerprint = COALESCE(?2, expected_fingerprint), finalized_fingerprint = CASE WHEN ?1 = 'Filesystem finalized' THEN ?2 ELSE finalized_fingerprint END, updated_at = ?3 WHERE id = ?4",
+            "UPDATE pending_file_operations SET phase = ?1, finalized_fingerprint = CASE WHEN ?1 = 'Filesystem finalized' THEN COALESCE(?2, finalized_fingerprint) ELSE finalized_fingerprint END, updated_at = ?3 WHERE id = ?4",
             params![phase.as_str(), fingerprint, now_millis(), id],
         ).map_err(LibraryError::database)?;
         Ok(())
@@ -983,6 +1183,18 @@ impl LibraryService {
         self.watcher = Some(LibraryWatcher::start(root, self.watcher_hints.clone())?);
         Ok(())
     }
+
+    fn enter_read_only(&mut self, reason: &str) {
+        self.mode = LibraryMode::ReadOnly;
+        self.read_only_reason = Some(reason.to_owned());
+        self.watcher = None;
+    }
+
+    fn preserve_metadata_evidence(&self) {
+        if let Some(database) = &self.database {
+            database.preserve_evidence();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -997,6 +1209,7 @@ struct ExistingDocument {
     id: String,
     path_key: String,
     file_identity: Option<String>,
+    fingerprint: String,
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {
@@ -1040,7 +1253,7 @@ fn load_existing_documents(
     library_id: &str,
 ) -> Result<Vec<ExistingDocument>, LibraryError> {
     let mut statement = transaction
-        .prepare("SELECT id, path_key, file_identity FROM documents WHERE library_id = ?1")
+        .prepare("SELECT id, path_key, file_identity, disk_fingerprint FROM documents WHERE library_id = ?1")
         .map_err(LibraryError::database)?;
     let rows = statement
         .query_map([library_id], |row| {
@@ -1048,6 +1261,7 @@ fn load_existing_documents(
                 id: row.get(0)?,
                 path_key: row.get(1)?,
                 file_identity: row.get(2)?,
+                fingerprint: row.get(3)?,
             })
         })
         .map_err(LibraryError::database)?
@@ -1056,55 +1270,272 @@ fn load_existing_documents(
     Ok(rows)
 }
 
-fn unique_project_identity<'a>(
-    existing: &'a [ExistingProject],
-    scanned: &ScannedProject,
-) -> Option<&'a ExistingProject> {
-    let identity = scanned.file_identity.as_ref()?;
-    let mut matches = existing
-        .iter()
-        .filter(|project| project.file_identity.as_ref() == Some(identity));
-    let first = matches.next()?;
-    matches.next().is_none().then_some(first)
-}
-
-fn unique_document_identity<'a>(
-    existing: &'a [ExistingDocument],
-    scanned: &ScannedDocument,
-) -> Option<&'a ExistingDocument> {
-    let identity = scanned.file_identity.as_ref()?;
-    let mut matches = existing
-        .iter()
-        .filter(|document| document.file_identity.as_ref() == Some(identity));
-    let first = matches.next()?;
-    matches.next().is_none().then_some(first)
-}
-
-fn delete_unseen(
+fn reconcile_transaction(
     transaction: &rusqlite::Transaction<'_>,
-    table: &str,
     library_id: &str,
-    seen_ids: &[String],
+    scanned: &[ScannedProject],
+    manifest: &str,
+    now: i64,
 ) -> Result<(), LibraryError> {
-    let query = format!("SELECT id FROM {table} WHERE library_id = ?1");
-    let mut statement = transaction
-        .prepare(&query)
+    let projects = load_existing_projects(transaction, library_id)?;
+    let documents = load_existing_documents(transaction, library_id)?;
+    let mut used_projects = HashSet::new();
+    let mut project_ids = vec![None; scanned.len()];
+
+    for (index, candidate) in scanned.iter().enumerate() {
+        let Some(identity) = candidate.file_identity.as_ref() else {
+            continue;
+        };
+        let existing_matches = projects
+            .iter()
+            .filter(|row| row.file_identity.as_ref() == Some(identity))
+            .collect::<Vec<_>>();
+        let scanned_matches = scanned
+            .iter()
+            .filter(|row| row.file_identity.as_ref() == Some(identity))
+            .count();
+        if existing_matches.len() == 1 && scanned_matches == 1 {
+            project_ids[index] = Some(existing_matches[0].id.clone());
+            used_projects.insert(existing_matches[0].id.clone());
+        }
+    }
+    for (index, candidate) in scanned.iter().enumerate() {
+        if project_ids[index].is_some() {
+            continue;
+        }
+        let key = path_key(&candidate.relative_path);
+        if let Some(existing) = projects.iter().find(|row| {
+            !used_projects.contains(&row.id)
+                && row.path_key == key
+                && identities_compatible(
+                    row.file_identity.as_ref(),
+                    candidate.file_identity.as_ref(),
+                )
+        }) {
+            project_ids[index] = Some(existing.id.clone());
+            used_projects.insert(existing.id.clone());
+        }
+    }
+
+    let flattened = scanned
+        .iter()
+        .enumerate()
+        .flat_map(|(project_index, project)| {
+            project
+                .documents
+                .iter()
+                .map(move |document| (project_index, document))
+        })
+        .collect::<Vec<_>>();
+    let mut used_documents = HashSet::new();
+    let mut document_ids = vec![None; flattened.len()];
+    for (index, (_, candidate)) in flattened.iter().enumerate() {
+        let Some(identity) = candidate.file_identity.as_ref() else {
+            continue;
+        };
+        let existing_matches = documents
+            .iter()
+            .filter(|row| row.file_identity.as_ref() == Some(identity))
+            .collect::<Vec<_>>();
+        let scanned_matches = flattened
+            .iter()
+            .filter(|(_, row)| row.file_identity.as_ref() == Some(identity))
+            .count();
+        if existing_matches.len() == 1 && scanned_matches == 1 {
+            document_ids[index] = Some(existing_matches[0].id.clone());
+            used_documents.insert(existing_matches[0].id.clone());
+        }
+    }
+    for (index, (_, candidate)) in flattened.iter().enumerate() {
+        if document_ids[index].is_some() {
+            continue;
+        }
+        let key = path_key(&candidate.relative_path);
+        if let Some(existing) = documents.iter().find(|row| {
+            !used_documents.contains(&row.id)
+                && row.path_key == key
+                && identities_compatible(
+                    row.file_identity.as_ref(),
+                    candidate.file_identity.as_ref(),
+                )
+        }) {
+            document_ids[index] = Some(existing.id.clone());
+            used_documents.insert(existing.id.clone());
+        }
+    }
+    for (index, (_, candidate)) in flattened.iter().enumerate() {
+        if document_ids[index].is_some() {
+            continue;
+        }
+        let existing_matches = documents
+            .iter()
+            .filter(|row| {
+                !used_documents.contains(&row.id) && row.fingerprint == candidate.fingerprint
+            })
+            .collect::<Vec<_>>();
+        let scanned_matches = flattened
+            .iter()
+            .enumerate()
+            .filter(|(other_index, (_, row))| {
+                document_ids[*other_index].is_none() && row.fingerprint == candidate.fingerprint
+            })
+            .count();
+        if existing_matches.len() == 1 && scanned_matches == 1 {
+            document_ids[index] = Some(existing_matches[0].id.clone());
+            used_documents.insert(existing_matches[0].id.clone());
+        }
+    }
+
+    transaction
+        .execute(
+            "UPDATE documents SET path_key = '@reconcile-document:' || id WHERE library_id = ?1",
+            [library_id],
+        )
         .map_err(LibraryError::database)?;
-    let existing = statement
-        .query_map([library_id], |row| row.get::<_, String>(0))
-        .map_err(LibraryError::database)?
-        .collect::<Result<Vec<_>, _>>()
+    transaction
+        .execute(
+            "UPDATE projects SET path_key = '@reconcile-project:' || id WHERE library_id = ?1",
+            [library_id],
+        )
         .map_err(LibraryError::database)?;
-    drop(statement);
-    let delete = format!("DELETE FROM {table} WHERE id = ?1");
-    for id in existing {
-        if !seen_ids.contains(&id) {
+
+    for (index, candidate) in scanned.iter().enumerate() {
+        let id = project_ids[index]
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        project_ids[index] = Some(id.clone());
+        used_projects.insert(id.clone());
+        transaction.execute(
+            "INSERT INTO projects (id, library_id, relative_path, path_key, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) ON CONFLICT(id) DO UPDATE SET relative_path = excluded.relative_path, path_key = excluded.path_key, file_identity = excluded.file_identity, updated_at = excluded.updated_at",
+            params![id, library_id, candidate.relative_path, path_key(&candidate.relative_path), candidate.file_identity, now],
+        ).map_err(database_conflict)?;
+    }
+    for (index, (project_index, candidate)) in flattened.iter().enumerate() {
+        let id = document_ids[index]
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        used_documents.insert(id.clone());
+        let project_id = project_ids[*project_index]
+            .as_ref()
+            .expect("project assignment");
+        transaction.execute(
+            "INSERT INTO documents (id, library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, disk_revision, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 0, ?7, ?8, ?8) ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, relative_path = excluded.relative_path, path_key = excluded.path_key, disk_fingerprint = excluded.disk_fingerprint, file_identity = excluded.file_identity, updated_at = excluded.updated_at",
+            params![id, library_id, project_id, candidate.relative_path, path_key(&candidate.relative_path), candidate.fingerprint, candidate.file_identity, now],
+        ).map_err(database_conflict)?;
+    }
+    for row in &documents {
+        if !used_documents.contains(&row.id) {
             transaction
-                .execute(&delete, [&id])
+                .execute("DELETE FROM documents WHERE id = ?1", [&row.id])
                 .map_err(LibraryError::database)?;
         }
     }
+    for row in &projects {
+        if !used_projects.contains(&row.id) {
+            transaction
+                .execute("DELETE FROM projects WHERE id = ?1", [&row.id])
+                .map_err(LibraryError::database)?;
+        }
+    }
+    transaction
+        .execute(
+            "UPDATE libraries SET manifest_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![manifest, now, library_id],
+        )
+        .map_err(LibraryError::database)?;
     Ok(())
+}
+
+fn identities_compatible(left: Option<&String>, right: Option<&String>) -> bool {
+    left.is_none() || right.is_none() || left == right
+}
+
+fn replay_move(
+    root: &Path,
+    from_relative_path: &str,
+    to_relative_path: &str,
+    operation_id: &str,
+    expected_fingerprint: Option<&str>,
+) -> Result<(), LibraryError> {
+    let source = resolve_new(root, from_relative_path)?;
+    let target = resolve_new(root, to_relative_path)?;
+    if path_key(from_relative_path) == path_key(to_relative_path) {
+        if !source.exists() {
+            return Err(journal_mismatch("Case-only rename target is missing"));
+        }
+        if let Some(expected) = expected_fingerprint {
+            verify_fingerprint(&source, expected)?;
+        }
+        case_aware_rename(&source, &target, operation_id).map_err(map_conflict_io)?;
+    } else {
+        match (source.exists(), target.exists()) {
+            (true, false) => {
+                if let Some(expected) = expected_fingerprint {
+                    verify_fingerprint(&source, expected)?;
+                }
+                rename_no_replace(&source, &target).map_err(map_conflict_io)?;
+                sync_parent(&target)?;
+            }
+            (false, true) => {}
+            (true, true) => return Err(journal_mismatch("Move source and target both exist")),
+            (false, false) => return Err(journal_mismatch("Move source and target are missing")),
+        }
+    }
+    if let Some(expected) = expected_fingerprint {
+        verify_fingerprint(&target, expected)?;
+    }
+    Ok(())
+}
+
+fn verify_fingerprint(path: &Path, expected: &str) -> Result<(), LibraryError> {
+    if fingerprint(path)? != expected {
+        return Err(journal_mismatch(
+            "Filesystem content no longer matches the journal",
+        ));
+    }
+    Ok(())
+}
+
+fn update_project_metadata(
+    connection: &mut rusqlite::Connection,
+    project_id: &str,
+    relative_path: &str,
+    identity: Option<String>,
+) -> Result<(), LibraryError> {
+    let transaction = connection.transaction().map_err(LibraryError::database)?;
+    transaction.execute(
+        "UPDATE projects SET relative_path = ?1, path_key = ?2, file_identity = ?3, updated_at = ?4 WHERE id = ?5",
+        params![relative_path, path_key(relative_path), identity, now_millis(), project_id],
+    ).map_err(database_conflict)?;
+    let paths = {
+        let mut statement = transaction
+            .prepare("SELECT id, relative_path FROM documents WHERE project_id = ?1")
+            .map_err(LibraryError::database)?;
+        statement
+            .query_map([project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(LibraryError::database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LibraryError::database)?
+    };
+    for (document_id, old_path) in paths {
+        validate_relative_path(&old_path, 2)?;
+        let file_name = old_path
+            .split('/')
+            .nth(1)
+            .ok_or_else(|| LibraryError::invalid_path("Stored document path is invalid"))?;
+        let updated = document_relative_path(relative_path, file_name);
+        transaction.execute(
+            "UPDATE documents SET relative_path = ?1, path_key = ?2, updated_at = ?3 WHERE id = ?4",
+            params![updated, path_key(&updated), now_millis(), document_id],
+        ).map_err(database_conflict)?;
+    }
+    transaction.commit().map_err(LibraryError::database)
+}
+
+fn journal_mismatch(message: &str) -> LibraryError {
+    LibraryError::new("journal_mismatch", message)
 }
 
 fn ensure_path_available(
@@ -1162,6 +1593,13 @@ fn state_token(snapshot: &LibrarySnapshot) -> String {
         }
     }
     format!("sha256:{:x}", Sha256::digest(values.join("\n")))
+}
+
+fn relink_state_token(snapshot: &LibrarySnapshot, candidate_manifest: &str) -> String {
+    format!(
+        "sha256:{:x}",
+        Sha256::digest(format!("{}\n{candidate_manifest}", state_token(snapshot)))
+    )
 }
 
 fn now_millis() -> i64 {

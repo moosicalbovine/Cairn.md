@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::library::LibraryError;
+use crate::domain::project::validate_relative_path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,7 +89,11 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
             can_rename = true;
         }
         fs::rename(&target, &source)?;
-        can_recover = true;
+        let recycled = recycle_file(&source)?;
+        can_recover = !source.exists();
+        if let Some(path) = recycled {
+            let _ = fs::remove_file(path);
+        }
         Ok(())
     })();
 
@@ -179,6 +184,7 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedProject>, LibraryError> {
 }
 
 pub fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, LibraryError> {
+    validate_managed_relative_path(relative_path)?;
     let canonical_root = canonical_root(root)?;
     let candidate = root.join(relative_path.replace('/', std::path::MAIN_SEPARATOR_STR));
     reject_link_components(root, &candidate)?;
@@ -188,6 +194,7 @@ pub fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, Lib
 }
 
 pub fn resolve_new(root: &Path, relative_path: &str) -> Result<PathBuf, LibraryError> {
+    validate_managed_relative_path(relative_path)?;
     let canonical_root = canonical_root(root)?;
     let candidate = root.join(relative_path.replace('/', std::path::MAIN_SEPARATOR_STR));
     let parent = candidate
@@ -195,8 +202,20 @@ pub fn resolve_new(root: &Path, relative_path: &str) -> Result<PathBuf, LibraryE
         .ok_or_else(|| LibraryError::invalid_path("Mutation target has no parent"))?;
     reject_link_components(root, parent)?;
     let canonical_parent = fs::canonicalize(parent).map_err(LibraryError::io)?;
-    ensure_below(&canonical_root, &canonical_parent)?;
+    if canonical_parent != canonical_root {
+        ensure_below(&canonical_root, &canonical_parent)?;
+    }
     Ok(candidate)
+}
+
+fn validate_managed_relative_path(relative_path: &str) -> Result<(), LibraryError> {
+    let component_count = relative_path.split('/').count();
+    if !(1..=2).contains(&component_count) {
+        return Err(LibraryError::invalid_path(
+            "Managed paths must contain one project and at most one document",
+        ));
+    }
+    validate_relative_path(relative_path, component_count).map(|_| ())
 }
 
 pub fn rename_no_replace(source: &Path, target: &Path) -> std::io::Result<()> {
@@ -246,13 +265,46 @@ pub fn write_durable(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
     file.sync_all().map_err(LibraryError::io)
 }
 
+#[cfg(windows)]
+pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
+        SHFILEOPSTRUCTW,
+    };
+
+    let mut from = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    from.push(0);
+    from.push(0);
+    let mut operation = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: from.as_ptr(),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
+        ..Default::default()
+    };
+    let result = unsafe { SHFileOperationW(&mut operation) };
+    if result != 0 || operation.fAnyOperationsAborted != 0 {
+        return Err(LibraryError::new(
+            "recycle_failed",
+            format!("Windows Recycle Bin operation failed ({result})"),
+        ));
+    }
+    Ok(None)
+}
+
+#[cfg(not(windows))]
+pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
+    let recovery = path.with_file_name(format!(".cairn-test-trash-{}", Uuid::new_v4()));
+    fs::rename(path, &recovery).map_err(LibraryError::io)?;
+    Ok(Some(recovery))
+}
+
 pub fn fingerprint(path: &Path) -> Result<String, LibraryError> {
     let bytes = fs::read(path).map_err(LibraryError::io)?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 pub fn file_identity(path: &Path) -> Result<Option<String>, LibraryError> {
-    let metadata = fs::metadata(path).map_err(LibraryError::io)?;
     #[cfg(windows)]
     {
         let handle = winapi_util::Handle::from_path_any(path).map_err(LibraryError::io)?;
@@ -266,14 +318,16 @@ pub fn file_identity(path: &Path) -> Result<Option<String>, LibraryError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(path).map_err(LibraryError::io)?;
         return Ok(Some(format!(
             "unix:{:x}:{:x}",
             metadata.dev(),
             metadata.ino()
         )));
     }
-    #[allow(unreachable_code)]
+    #[cfg(not(any(windows, unix)))]
     {
+        let metadata = fs::metadata(path).map_err(LibraryError::io)?;
         let modified = metadata
             .modified()
             .ok()
@@ -330,8 +384,10 @@ fn is_link_or_reparse(path: &Path) -> Result<bool, LibraryError> {
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return Ok(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0);
     }
-    #[allow(unreachable_code)]
-    Ok(false)
+    #[cfg(not(windows))]
+    {
+        Ok(false)
+    }
 }
 
 pub fn sync_parent(path: &Path) -> Result<(), LibraryError> {

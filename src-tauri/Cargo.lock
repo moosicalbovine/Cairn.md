@@ -383,6 +383,7 @@ dependencies = [
  "tempfile",
  "uuid",
  "winapi-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ import {
   createProject,
   loadLibraryIndex,
   parseLibrarySnapshot,
+  watchLibraryReconciliation,
   type LibrarySnapshot,
 } from "../../lib/tauri/library";
 
@@ -62,5 +63,35 @@ describe("library command bridge", () => {
         projects: [{ id: "p", relativePath: "C:\\absolute", documents: [] }],
       }),
     ).toThrow("Invalid library snapshot");
+  });
+
+  it("consumes watcher hints without overlapping reconciliation calls", async () => {
+    vi.useFakeTimers();
+    const snapshots: LibrarySnapshot[] = [];
+    let releaseFirst: ((value: unknown) => void) | undefined;
+    vi.mocked(invoke)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(snapshot);
+
+    const stop = watchLibraryReconciliation((value) => snapshots.push(value), vi.fn(), 100);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    releaseFirst?.(null);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(snapshots).toEqual([snapshot]);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

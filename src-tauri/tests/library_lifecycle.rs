@@ -70,7 +70,14 @@ fn project_and_document_lifecycle_preserves_stable_ids() {
     assert!(root.path().join("Beta").join("notes.md").is_file());
 
     let deleted = service.delete_document(&document.id).unwrap();
-    assert!(deleted.recovery_path.is_file());
+    assert!(deleted.recycled);
+    #[cfg(windows)]
+    assert!(deleted.recovery_path.is_none());
+    #[cfg(not(windows))]
+    assert!(deleted
+        .recovery_path
+        .as_ref()
+        .is_some_and(|path| path.is_file()));
     assert!(!root.path().join("Beta").join("notes.md").exists());
     assert!(service
         .snapshot()
@@ -78,6 +85,7 @@ fn project_and_document_lifecycle_preserves_stable_ids() {
         .projects
         .iter()
         .all(|project| project.documents.is_empty()));
+    assert_eq!(service.pending_operation_count().unwrap(), 0);
 }
 
 #[test]
@@ -164,6 +172,88 @@ fn external_rename_rebinds_the_existing_document_without_duplicates() {
 }
 
 #[test]
+fn reconciliation_follows_identity_when_two_paths_are_swapped() {
+    let (_app_data, root, mut service) = service_and_root();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let first = service.create_document(&project.id, "first.md").unwrap();
+    let second = service.create_document(&project.id, "second.md").unwrap();
+    fs::write(root.path().join("Alpha/first.md"), "first").unwrap();
+    fs::write(root.path().join("Alpha/second.md"), "second").unwrap();
+    service.reconcile().unwrap();
+
+    let temporary = root.path().join("Alpha/swap.tmp");
+    fs::rename(root.path().join("Alpha/first.md"), &temporary).unwrap();
+    fs::rename(
+        root.path().join("Alpha/second.md"),
+        root.path().join("Alpha/first.md"),
+    )
+    .unwrap();
+    fs::rename(&temporary, root.path().join("Alpha/second.md")).unwrap();
+    service.reconcile().unwrap();
+
+    let documents = service.snapshot().unwrap().projects[0].documents.clone();
+    assert_eq!(
+        documents
+            .iter()
+            .find(|document| document.id == first.id)
+            .unwrap()
+            .relative_path,
+        "Alpha/second.md"
+    );
+    assert_eq!(
+        documents
+            .iter()
+            .find(|document| document.id == second.id)
+            .unwrap()
+            .relative_path,
+        "Alpha/first.md"
+    );
+}
+
+#[test]
+fn reconciliation_never_reuses_one_row_for_two_hard_linked_paths() {
+    let (_app_data, root, mut service) = service_and_root();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    service.create_document(&project.id, "one.md").unwrap();
+    service.create_document(&project.id, "two.md").unwrap();
+    fs::remove_file(root.path().join("Alpha/two.md")).unwrap();
+    fs::hard_link(
+        root.path().join("Alpha/one.md"),
+        root.path().join("Alpha/two.md"),
+    )
+    .unwrap();
+
+    service.reconcile().unwrap();
+    let documents = &service.snapshot().unwrap().projects[0].documents;
+    assert_eq!(documents.len(), 2);
+    assert_ne!(documents[0].id, documents[1].id);
+}
+
+#[test]
+fn unique_fingerprint_fallback_preserves_id_when_identity_changes() {
+    let (_app_data, root, mut service) = service_and_root();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "before.md").unwrap();
+    fs::write(root.path().join("Alpha/before.md"), "unique content").unwrap();
+    service.reconcile().unwrap();
+    fs::copy(
+        root.path().join("Alpha/before.md"),
+        root.path().join("Alpha/after.md"),
+    )
+    .unwrap();
+    fs::remove_file(root.path().join("Alpha/before.md")).unwrap();
+
+    service.reconcile().unwrap();
+    let documents = &service.snapshot().unwrap().projects[0].documents;
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].id, document.id);
+    assert_eq!(documents[0].relative_path, "Alpha/after.md");
+}
+
+#[test]
 fn relocation_requires_confirmation_and_increments_only_the_binding_generation() {
     let app_data = TempDir::new().unwrap();
     let container = TempDir::new().unwrap();
@@ -202,6 +292,17 @@ fn failed_or_stale_relink_preserves_the_previous_binding() {
     assert_eq!(
         service.preview_relink(&missing).unwrap_err().code(),
         "root_unavailable"
+    );
+    assert_eq!(service.snapshot().unwrap().binding.unwrap(), first);
+
+    let content_candidate = TempDir::new().unwrap();
+    fs::create_dir(content_candidate.path().join("Alpha")).unwrap();
+    fs::write(content_candidate.path().join("Alpha/note.md"), "before").unwrap();
+    let stale_content = service.preview_relink(content_candidate.path()).unwrap();
+    fs::write(content_candidate.path().join("Alpha/note.md"), "after").unwrap();
+    assert_eq!(
+        service.confirm_relink(stale_content).unwrap_err().code(),
+        "stale_relink"
     );
     assert_eq!(service.snapshot().unwrap().binding.unwrap(), first);
 
@@ -248,6 +349,56 @@ fn startup_replays_an_interrupted_operation_once() {
 }
 
 #[test]
+fn startup_replays_create_after_final_rename_before_phase_update() {
+    let app_data = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    service
+        .create_document_interrupted_after_finalize_before_phase_for_test(&project.id, "window.md")
+        .unwrap();
+    assert!(root.path().join("Alpha/window.md").is_file());
+    drop(service);
+
+    let restarted = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = restarted.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::Writable);
+    assert_eq!(snapshot.projects[0].documents.len(), 1);
+    assert_eq!(
+        snapshot.projects[0].documents[0].relative_path,
+        "Alpha/window.md"
+    );
+    assert_eq!(restarted.pending_operation_count().unwrap(), 0);
+}
+
+#[test]
+fn replay_mismatch_opens_read_only_and_preserves_pending_evidence() {
+    let app_data = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    service
+        .create_document_interrupted_after_finalize_before_phase_for_test(
+            &project.id,
+            "mismatch.md",
+        )
+        .unwrap();
+    fs::write(root.path().join("Alpha/mismatch.md"), "changed").unwrap();
+    drop(service);
+
+    let restarted = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = restarted.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::ReadOnly);
+    assert_eq!(
+        snapshot.read_only_reason.as_deref(),
+        Some("journal_recovery_failed")
+    );
+    assert_eq!(restarted.pending_operation_count().unwrap(), 1);
+}
+
+#[test]
 fn damaged_metadata_fails_closed_without_replacement() {
     let app_data = TempDir::new().unwrap();
     fs::create_dir_all(app_data.path()).unwrap();
@@ -267,6 +418,10 @@ fn damaged_metadata_fails_closed_without_replacement() {
         "metadata_damaged"
     );
     assert_eq!(fs::read(database_path).unwrap(), damaged);
+    assert!(fs::read_dir(app_data.path().join("metadata-quarantine"))
+        .unwrap()
+        .next()
+        .is_some());
 }
 
 #[test]
@@ -283,13 +438,20 @@ fn unavailable_candidate_and_non_directory_candidate_fail_capability_probe() {
 #[cfg(windows)]
 #[test]
 fn reparse_point_projects_are_never_indexed() {
-    use std::os::windows::fs::symlink_dir;
+    use std::process::Command;
 
     let (_app_data, root, mut service) = service_and_root();
     let outside = TempDir::new().unwrap();
-    if symlink_dir(outside.path(), root.path().join("Escape")).is_err() {
-        return;
-    }
+    let link = root.path().join("Escape");
+    let status = Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(&link)
+        .arg(outside.path())
+        .status()
+        .expect("run mklink junction fixture");
+    assert!(status.success(), "junction fixture must be exercised");
     service.bind_root(root.path()).unwrap();
     assert!(service.snapshot().unwrap().projects.is_empty());
 }

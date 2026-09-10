@@ -76,3 +76,46 @@ pub fn document_relative_path(project: &str, document: &str) -> String {
 pub fn path_key(relative_path: &str) -> String {
     relative_path.replace('\\', "/").to_lowercase()
 }
+
+pub fn validate_relative_path(
+    relative_path: &str,
+    expected_components: usize,
+) -> Result<String, LibraryError> {
+    if relative_path.is_empty()
+        || relative_path.contains('\\')
+        || relative_path.starts_with('/')
+        || relative_path.as_bytes().get(1) == Some(&b':')
+    {
+        return Err(LibraryError::invalid_path(
+            "Managed paths must be relative and use forward slashes",
+        ));
+    }
+
+    let parts = relative_path.split('/').collect::<Vec<_>>();
+    if parts.len() != expected_components
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == "..")
+        || Path::new(relative_path)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(LibraryError::invalid_path(
+            "Managed path has an invalid component",
+        ));
+    }
+    if parts.iter().any(|part| {
+        part.trim() != *part
+            || part.ends_with('.')
+            || part.ends_with(' ')
+            || part.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*')
+            })
+    }) {
+        return Err(LibraryError::invalid_path(
+            "Managed path contains an invalid Windows component",
+        ));
+    }
+    Ok(relative_path.to_owned())
+}

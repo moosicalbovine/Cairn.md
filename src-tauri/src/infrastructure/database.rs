@@ -32,20 +32,14 @@ impl Database {
         let mut connection = match Connection::open_with_flags(&path, flags) {
             Ok(connection) => connection,
             Err(error) if existed_with_data => {
-                return Ok(DatabaseOpen::Damaged {
-                    path,
-                    reason: error.to_string(),
-                });
+                return Ok(damaged(path, error.to_string()));
             }
             Err(error) => return Err(LibraryError::database(error)),
         };
 
         if let Err(error) = configure(&connection) {
             if existed_with_data {
-                return Ok(DatabaseOpen::Damaged {
-                    path,
-                    reason: error.to_string(),
-                });
+                return Ok(damaged(path, error.to_string()));
             }
             return Err(LibraryError::database(error));
         }
@@ -54,49 +48,57 @@ impl Database {
             match integrity_check(&connection) {
                 Ok(true) => {}
                 Ok(false) => {
-                    return Ok(DatabaseOpen::Damaged {
-                        path,
-                        reason: "SQLite integrity_check failed".to_owned(),
-                    });
+                    return Ok(damaged(path, "SQLite integrity_check failed".to_owned()));
                 }
                 Err(error) => {
-                    return Ok(DatabaseOpen::Damaged {
-                        path,
-                        reason: error.to_string(),
-                    });
+                    return Ok(damaged(path, error.to_string()));
                 }
             }
         }
 
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(LibraryError::database)?;
+        let version: i64 = match connection.query_row("PRAGMA user_version", [], |row| row.get(0)) {
+            Ok(version) => version,
+            Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+            Err(error) => return Err(LibraryError::database(error)),
+        };
         if version > 1 {
-            return Ok(DatabaseOpen::Damaged {
+            return Ok(damaged(
                 path,
-                reason: format!("Unsupported metadata schema version {version}"),
-            });
+                format!("Unsupported metadata schema version {version}"),
+            ));
         }
         if version < 1 {
-            let transaction = connection.transaction().map_err(LibraryError::database)?;
+            let transaction = match connection.transaction() {
+                Ok(transaction) => transaction,
+                Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+                Err(error) => return Err(LibraryError::database(error)),
+            };
             if let Err(error) = transaction.execute_batch(MIGRATION_0001) {
                 return if existed_with_data {
-                    Ok(DatabaseOpen::Damaged {
-                        path,
-                        reason: format!("Metadata migration failed: {error}"),
-                    })
+                    Ok(damaged(path, format!("Metadata migration failed: {error}")))
                 } else {
                     Err(LibraryError::database(error))
                 };
             }
-            transaction.commit().map_err(LibraryError::database)?;
+            if let Err(error) = transaction.commit() {
+                return if existed_with_data {
+                    Ok(damaged(path, error.to_string()))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
         }
 
-        if !integrity_check(&connection).map_err(LibraryError::database)? {
-            return Ok(DatabaseOpen::Damaged {
-                path,
-                reason: "SQLite integrity_check failed after migration".to_owned(),
-            });
+        match integrity_check(&connection) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(damaged(
+                    path,
+                    "SQLite integrity_check failed after migration".to_owned(),
+                ));
+            }
+            Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+            Err(error) => return Err(LibraryError::database(error)),
         }
 
         Ok(DatabaseOpen::Healthy(Self { connection, path }))
@@ -112,6 +114,36 @@ impl Database {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn preserve_evidence(&self) {
+        preserve_failure_evidence(&self.path);
+    }
+}
+
+fn damaged(path: PathBuf, reason: String) -> DatabaseOpen {
+    preserve_failure_evidence(&path);
+    DatabaseOpen::Damaged { path, reason }
+}
+
+fn preserve_failure_evidence(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let evidence = parent.join("metadata-quarantine");
+    if fs::create_dir_all(&evidence).is_err() {
+        return;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    for suffix in ["", "-wal", "-shm"] {
+        let source = PathBuf::from(format!("{}{suffix}", path.to_string_lossy()));
+        if source.is_file() {
+            let destination = evidence.join(format!("library-{stamp}.sqlite3{suffix}"));
+            let _ = fs::copy(source, destination);
+        }
     }
 }
 
