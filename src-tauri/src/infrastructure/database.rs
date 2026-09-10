@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::domain::library::LibraryError;
 
@@ -89,6 +89,18 @@ impl Database {
             }
         }
 
+        match schema_check(&connection) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(damaged(
+                    path,
+                    "SQLite schema does not match the supported metadata model".to_owned(),
+                ));
+            }
+            Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+            Err(error) => return Err(LibraryError::database(error)),
+        }
+
         match integrity_check(&connection) {
             Ok(true) => {}
             Ok(false) => {
@@ -158,4 +170,96 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
 fn integrity_check(connection: &Connection) -> rusqlite::Result<bool> {
     let result: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     Ok(result == "ok")
+}
+
+fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
+    const REQUIRED_TABLES: &[(&str, &[&str])] = &[
+        ("app_settings", &["key", "value"]),
+        (
+            "libraries",
+            &[
+                "id",
+                "root_path",
+                "root_identity",
+                "binding_generation",
+                "previous_root_path",
+                "manifest_json",
+                "updated_at",
+            ],
+        ),
+        (
+            "projects",
+            &[
+                "id",
+                "library_id",
+                "relative_path",
+                "path_key",
+                "file_identity",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        (
+            "documents",
+            &[
+                "id",
+                "library_id",
+                "project_id",
+                "relative_path",
+                "path_key",
+                "source_path",
+                "imported_at",
+                "disk_fingerprint",
+                "disk_revision",
+                "file_identity",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        (
+            "tracked_folders",
+            &["id", "absolute_path", "display_name", "last_scan_at"],
+        ),
+        (
+            "pending_file_operations",
+            &[
+                "id",
+                "library_id",
+                "kind",
+                "phase",
+                "payload_json",
+                "expected_fingerprint",
+                "finalized_fingerprint",
+                "temporary_path",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+    ];
+
+    for &(table, required_columns) in REQUIRED_TABLES {
+        let object_type = connection
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name = ?1",
+                [table],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if object_type.as_deref() != Some("table") {
+            return Ok(false);
+        }
+
+        let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if required_columns
+            .iter()
+            .any(|required| !columns.iter().any(|column| column == *required))
+        {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }

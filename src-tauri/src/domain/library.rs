@@ -269,6 +269,7 @@ impl LibraryService {
                     log::error!("Cairn.md binding read failed: {error}");
                     service.enter_read_only("metadata_damaged");
                     service.preserve_metadata_evidence();
+                    service.database = None;
                 }
             }
         }
