@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { parseDocumentSnapshot, type DocumentSnapshot } from "./library";
+
 export type RecoveryLifecycle = "Draft" | "Saving" | "Recovered" | "Conflict";
 
 export type RecoverySnapshotRequest = Readonly<{
@@ -130,6 +132,18 @@ export async function saveDocument(
   return parseSaveDocumentResult(
     await invoke<unknown>("save_document", {
       request: { ...request, bytes: Array.from(request.bytes) },
+    }),
+  );
+}
+
+export async function saveRecoveryCopy(
+  documentId: string,
+  sessionGeneration: string,
+): Promise<DocumentSnapshot> {
+  return parseDocumentSnapshot(
+    await invoke<unknown>("save_recovery_copy", {
+      documentId,
+      sessionGeneration,
     }),
   );
 }

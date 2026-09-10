@@ -1,6 +1,16 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
-import { readDocument, type DocumentSnapshot } from "../../../lib/tauri/library";
+import {
+  readDocument,
+  type DocumentContent,
+  type DocumentSnapshot,
+} from "../../../lib/tauri/library";
+import {
+  discardRecoverySnapshot,
+  loadRecoverySnapshot,
+  saveRecoveryCopy,
+  type RecoverySnapshot,
+} from "../../../lib/tauri/persistence";
 import {
   AutosaveController,
   type PersistenceProgress,
@@ -21,55 +31,129 @@ const VisualDocumentEditor = lazy(() =>
 type DocumentEditorProps = Readonly<{
   document: DocumentSnapshot;
   readOnly?: boolean;
+  onRecoveryCopySaved?(document: DocumentSnapshot): void;
 }>;
 
 function nameOf(document: DocumentSnapshot): string {
   return document.relativePath.split("/").at(-1) ?? document.relativePath;
 }
 
-export function DocumentEditor({ document, readOnly = false }: DocumentEditorProps) {
+export function DocumentEditor({
+  document,
+  readOnly = false,
+  onRecoveryCopySaved,
+}: DocumentEditorProps) {
   const [editor, setEditor] = useState<EditorSession | null>(null);
   const [mode, setMode] = useState<EditorMode>(readOnly ? "source" : "visual");
   const [error, setError] = useState<string | null>(null);
   const [persistence, setPersistence] = useState<PersistenceProgress | null>(null);
-  const [autosave, setAutosave] = useState<AutosaveController | null>(null);
+  const [diskContent, setDiskContent] = useState<DocumentContent | null>(null);
+  const [recovery, setRecovery] = useState<RecoverySnapshot | null>(null);
+  const editorRef = useRef<EditorSession | null>(null);
+  const autosaveRef = useRef<AutosaveController | null>(null);
+
+  const startSession = useCallback((
+    bytes: Uint8Array,
+    baseFingerprint: string,
+    recovered?: RecoverySnapshot,
+  ) => {
+    const opened = recovered
+      ? EditorSession.openRecovered(bytes, recovered.revision)
+      : EditorSession.open(bytes);
+    editorRef.current = opened;
+    if (!readOnly && !opened.session.isReadOnly) {
+      autosaveRef.current = new AutosaveController({
+        documentId: document.id,
+        session: opened.session,
+        baseFingerprint,
+        ...(recovered ? { initialSnapshot: recovered } : {}),
+        onProgress: setPersistence,
+      });
+    }
+    setEditor(opened);
+    setMode(readOnly || opened.session.isReadOnly ? "source" : opened.mode);
+  }, [document.id, readOnly]);
 
   useEffect(() => {
     let active = true;
-    let opened: EditorSession | null = null;
-    let persistenceController: AutosaveController | null = null;
-    void readDocument(document.id).then(
-      (content) => {
+    void (async () => {
+      try {
+        const content = await readDocument(document.id);
+        let pending = await loadRecoverySnapshot(document.id);
         if (!active) return;
-        opened = EditorSession.open(content.bytes);
-        if (!readOnly && !opened.session.isReadOnly) {
-          persistenceController = new AutosaveController({
-            documentId: document.id,
-            session: opened.session,
-            baseFingerprint: content.baseFingerprint,
-            onProgress: setPersistence,
-          });
-          setAutosave(persistenceController);
+        if (pending?.intendedDiskHash === content.baseFingerprint) {
+          await discardRecoverySnapshot(document.id, pending.sessionGeneration);
+          pending = null;
         }
-        setEditor(opened);
-        setMode(readOnly || opened.session.isReadOnly ? "source" : opened.mode);
-      },
-      (reason) => {
+        if (!active) return;
+        setDiskContent(content);
+        if (pending) {
+          setRecovery(pending);
+          setPersistence({
+            label: "Recovered",
+            currentRevision: pending.revision,
+            durableSnapshotRevision: pending.revision,
+            diskRevision: 0,
+          });
+        } else {
+          startSession(content.bytes, content.baseFingerprint);
+        }
+      } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "Document could not be opened.");
-      },
-    );
+      }
+    })();
     return () => {
       active = false;
-      void persistenceController?.dispose();
-      opened?.dispose();
+      const autosave = autosaveRef.current;
+      autosaveRef.current = null;
+      void autosave?.dispose();
+      editorRef.current?.dispose();
+      editorRef.current = null;
     };
-  }, [document.id, readOnly]);
+  }, [document.id, startSession]);
 
   function switchMode(next: EditorMode) {
     if (!editor || (readOnly && next === "visual")) return;
     editor.switchMode(next);
     setMode(next);
   }
+
+  function keepRecovery() {
+    if (!recovery || !diskContent) return;
+    setRecovery(null);
+    startSession(recovery.bytes, recovery.baseFingerprint, recovery);
+    autosaveRef.current?.acceptRecovery();
+  }
+
+  async function discardRecovery() {
+    if (!recovery || !diskContent) return;
+    setError(null);
+    try {
+      await discardRecoverySnapshot(document.id, recovery.sessionGeneration);
+      setRecovery(null);
+      setPersistence(null);
+      startSession(diskContent.bytes, diskContent.baseFingerprint);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Recovery could not be discarded.");
+    }
+  }
+
+  async function saveRecoveredCopy() {
+    if (!recovery) return;
+    setError(null);
+    try {
+      const copy = await saveRecoveryCopy(document.id, recovery.sessionGeneration);
+      onRecoveryCopySaved?.(copy);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The recovered copy could not be saved.");
+    }
+  }
+
+  const recoveryCanResume =
+    recovery !== null &&
+    diskContent !== null &&
+    recovery.lifecycleState !== "Conflict" &&
+    recovery.baseFingerprint === diskContent.baseFingerprint;
 
   return (
     <div className="document-workspace">
@@ -80,7 +164,7 @@ export function DocumentEditor({ document, readOnly = false }: DocumentEditorPro
             <div className="persistence-state" aria-live="polite">
               <span data-state={persistence.label}>{persistence.label}</span>
               {persistence.label === "Save failed" && (
-                <button type="button" onClick={() => autosave?.retry()}>Retry</button>
+                <button type="button" onClick={() => autosaveRef.current?.retry()}>Retry</button>
               )}
             </div>
           )}
@@ -91,7 +175,23 @@ export function DocumentEditor({ document, readOnly = false }: DocumentEditorPro
         </div>
       </header>
       {error && <div className="editor-message" role="alert">{error}</div>}
-      {!editor && !error && <div className="editor-message">Opening Markdown…</div>}
+      {recovery && (
+        <div className="recovery-panel" role="status">
+          <h3>{recoveryCanResume ? "Recovered editing session" : "Recovered changes need a new copy"}</h3>
+          <p>
+            {recoveryCanResume
+              ? "Cairn.md recovered changes that had not reached the Markdown file."
+              : "The Markdown file changed outside Cairn.md. Both versions are preserved."}
+          </p>
+          <pre>{new TextDecoder().decode(recovery.bytes)}</pre>
+          <div>
+            {recoveryCanResume && <button type="button" onClick={keepRecovery}>Keep recovered changes</button>}
+            {!recoveryCanResume && <button type="button" onClick={() => void saveRecoveredCopy()}>Save as recovered copy</button>}
+            <button type="button" onClick={() => void discardRecovery()}>Discard and reload file</button>
+          </div>
+        </div>
+      )}
+      {!editor && !recovery && !error && <div className="editor-message">Opening Markdown…</div>}
       {editor && (
         <Suspense fallback={<div className="editor-message">Loading {mode} mode…</div>}>
           {mode === "visual" ? (

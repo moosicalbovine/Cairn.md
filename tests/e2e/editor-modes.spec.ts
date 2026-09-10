@@ -66,4 +66,15 @@ describe("Visual and Source mode integration", () => {
     expect(editor.availableModes).toEqual(["visual", "source"]);
     expect(() => editor.switchMode("preview" as never)).toThrow(/mode/i);
   });
+
+  it("resumes a recovered revision without resetting its monotonic counter", () => {
+    const editor = EditorSession.openRecovered(
+      new TextEncoder().encode("recovered"),
+      7,
+    );
+
+    expect(editor.session.revision).toBe(7);
+    editor.replaceSource("continued", 7);
+    expect(editor.session.revision).toBe(8);
+  });
 });

@@ -122,6 +122,14 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .source-editor .cm-scroller { padding: 20px clamp(18px, 5vw, 64px) 54px; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; line-height: 1.65; }
 .source-editor .cm-gutters { color: var(--muted); background: var(--content); border-color: var(--line); }
 .editor-message { align-self: start; margin: 24px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--content); font-size: 12px; }
+.recovery-panel { display: grid; width: min(calc(100% - 48px), 760px); max-height: calc(100% - 48px); place-self: start center; gap: 10px; margin: 24px; padding: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--content); }
+.recovery-panel h3, .recovery-panel p { margin: 0; }
+.recovery-panel h3 { font-size: 15px; }
+.recovery-panel p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.recovery-panel pre { min-height: 120px; margin: 2px 0; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--editor); font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+.recovery-panel > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.recovery-panel button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--window); font-size: 11px; }
+.recovery-panel button:first-child { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 .read-only-banner, .notice-banner { padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .read-only-banner { color: #75520c; background: #fff0c9; }

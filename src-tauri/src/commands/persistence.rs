@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::commands::library::{service, LibraryState};
+use crate::domain::library::DocumentSnapshot;
 use crate::domain::library::LibraryError;
 use crate::domain::recovery::{RecoverySnapshot, RecoverySnapshotRequest, SaveDocumentResult};
 
@@ -35,4 +36,13 @@ pub fn save_document(
     request: RecoverySnapshotRequest,
 ) -> Result<SaveDocumentResult, LibraryError> {
     service(&state)?.save_document(request)
+}
+
+#[tauri::command]
+pub fn save_recovery_copy(
+    state: State<'_, LibraryState>,
+    document_id: String,
+    session_generation: String,
+) -> Result<DocumentSnapshot, LibraryError> {
+    service(&state)?.save_recovery_copy(&document_id, &session_generation)
 }

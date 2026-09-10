@@ -894,6 +894,67 @@ impl LibraryService {
         })
     }
 
+    pub fn save_recovery_copy(
+        &mut self,
+        document_id: &str,
+        session_generation: &str,
+    ) -> Result<DocumentSnapshot, LibraryError> {
+        let snapshot = self
+            .load_recovery_snapshot(document_id)?
+            .ok_or_else(|| LibraryError::new("recovery_missing", "No recovery snapshot exists"))?;
+        if snapshot.session_generation != session_generation {
+            return Err(LibraryError::new(
+                "recovery_mismatch",
+                "Recovery session generation does not match",
+            ));
+        }
+        let binding = self.required_writable_binding()?;
+        let project = self.project_for_document(document_id)?;
+        let document = self.document_by_id(document_id)?;
+        let original_name = document
+            .relative_path
+            .split('/')
+            .nth(1)
+            .ok_or_else(|| LibraryError::invalid_path("Stored document path is invalid"))?;
+        let original_path = Path::new(original_name);
+        let stem = original_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| LibraryError::invalid_path("Stored document name is invalid"))?;
+        let recovered_name = format!("{stem} (recovered).md");
+
+        for sequence in 1..=10_000 {
+            let name = collision_name(&recovered_name, sequence)?;
+            let relative = document_relative_path(&project.relative_path, &name);
+            if self.document_destination_exists(&binding, &relative)? {
+                continue;
+            }
+            let recovered = self.create_document(&project.id, &name)?;
+            let empty = self.read_document(&recovered.id)?;
+            let request = RecoverySnapshotRequest {
+                document_id: recovered.id.clone(),
+                session_generation: Uuid::new_v4().to_string(),
+                revision: 1,
+                bytes: snapshot.bytes.clone(),
+                base_fingerprint: empty.base_fingerprint,
+            };
+            self.store_recovery_snapshot(request.clone())?;
+            let result = self.save_document(request)?;
+            if result.status != SaveStatus::Saved {
+                return Err(LibraryError::new(
+                    "recovery_copy_conflict",
+                    "The recovered copy changed before it could be saved",
+                ));
+            }
+            self.discard_recovery_snapshot(document_id, session_generation)?;
+            return self.document_by_id(&recovered.id);
+        }
+        Err(LibraryError::new(
+            "collision_limit",
+            "No recovered document name is available",
+        ))
+    }
+
     fn record_external_conflict(
         &mut self,
         operation_id: &str,

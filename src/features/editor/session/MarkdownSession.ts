@@ -29,9 +29,10 @@ export class MarkdownSession {
   #originalBytes: Uint8Array;
   #listeners = new Set<MarkdownSessionListener>();
 
-  private constructor(decoded: DecodedMarkdown) {
+  private constructor(decoded: DecodedMarkdown, initialRevision = 0) {
     this.#source = decoded.source;
     this.#originalBytes = Uint8Array.from(decoded.originalBytes);
+    this.#revision = initialRevision;
     this.isReadOnly = !decoded.isValidUtf8;
     this.hasUtf8Bom = decoded.hasUtf8Bom;
     this.lineEnding = decoded.lineEnding;
@@ -43,6 +44,17 @@ export class MarkdownSession {
 
   static fromDecoded(decoded: DecodedMarkdown): MarkdownSession {
     return new MarkdownSession(decoded);
+  }
+
+  static fromRecoveredBytes(bytes: Uint8Array, revision: number): MarkdownSession {
+    if (!Number.isSafeInteger(revision) || revision <= 0) {
+      throw new Error("Recovered Markdown revision must be positive.");
+    }
+    const session = new MarkdownSession(decodeMarkdownBytes(bytes), revision);
+    if (session.isReadOnly) {
+      throw new Error("Recovered Markdown must be valid UTF-8.");
+    }
+    return session;
   }
 
   static fromSource(source: string): MarkdownSession {

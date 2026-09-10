@@ -29,6 +29,10 @@ export class EditorSession {
     return new EditorSession(MarkdownSession.fromSource(source));
   }
 
+  static openRecovered(bytes: Uint8Array, revision: number): EditorSession {
+    return new EditorSession(MarkdownSession.fromRecoveredBytes(bytes, revision));
+  }
+
   get mode(): EditorMode {
     return this.#mode;
   }

@@ -169,4 +169,21 @@ fn external_change_is_preserved_beside_the_recoverable_draft() {
     assert_eq!(recovery.bytes, b"local draft");
     assert_eq!(recovery.lifecycle_state, RecoveryLifecycle::Conflict);
     assert_eq!(service.pending_operation_count().unwrap(), 0);
+
+    let recovered_copy = service
+        .save_recovery_copy(&document_id, &generation)
+        .unwrap();
+    assert_eq!(recovered_copy.relative_path, "Alpha/draft (recovered).md");
+    assert_eq!(
+        fs::read(root.path().join(&recovered_copy.relative_path)).unwrap(),
+        b"local draft"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("Alpha/draft.md")).unwrap(),
+        "external edit"
+    );
+    assert!(service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .is_none());
 }

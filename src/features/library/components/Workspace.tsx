@@ -258,6 +258,9 @@ export function Workspace({
                 key={selectedDocument.id}
                 document={selectedDocument}
                 readOnly={!canMutate}
+                onRecoveryCopySaved={(copy) => void run(async () => {
+                  await refresh(copy.id);
+                })}
               />
             </Suspense>
           ) : (

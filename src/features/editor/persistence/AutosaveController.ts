@@ -29,6 +29,7 @@ type AutosaveOptions = Readonly<{
   generation?: string;
   delayMs?: number;
   port?: PersistencePort;
+  initialSnapshot?: RecoverySnapshot;
 }>;
 
 const defaultPort: PersistencePort = { storeRecoverySnapshot, saveDocument };
@@ -46,6 +47,7 @@ export class AutosaveController {
   #durableSnapshot: RecoverySnapshot | null = null;
   #diskRevision = 0;
   #failed = false;
+  #recovered = false;
   #disposed = false;
   #snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   #saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,13 +57,18 @@ export class AutosaveController {
   constructor(options: AutosaveOptions) {
     this.#documentId = options.documentId;
     this.#session = options.session;
-    this.#generation = options.generation ?? globalThis.crypto.randomUUID();
+    this.#generation =
+      options.initialSnapshot?.sessionGeneration ??
+      options.generation ??
+      globalThis.crypto.randomUUID();
     this.#baseFingerprint = options.baseFingerprint;
     this.#delayMs = options.delayMs ?? 350;
     this.#port = options.port ?? defaultPort;
     this.#onProgress = options.onProgress;
+    this.#durableSnapshot = options.initialSnapshot ?? null;
+    this.#recovered = options.initialSnapshot !== undefined;
     this.#unsubscribe = this.#session.subscribe(() => this.#acknowledgeEdit());
-    this.#emit("Saved");
+    this.#emit(this.#recovered ? "Recovered" : "Saved");
   }
 
   get progress(): PersistenceProgress {
@@ -71,6 +78,13 @@ export class AutosaveController {
   retry(): void {
     if (!this.#failed || this.#disposed) return;
     this.#failed = false;
+    this.#emit("Saving…");
+    this.#scheduleSave(0);
+  }
+
+  acceptRecovery(): void {
+    if (!this.#recovered || this.#disposed) return;
+    this.#recovered = false;
     this.#emit("Saving…");
     this.#scheduleSave(0);
   }
@@ -85,6 +99,7 @@ export class AutosaveController {
 
   #acknowledgeEdit(): void {
     if (this.#disposed) return;
+    this.#recovered = false;
     this.#emit(this.#failed ? "Save failed" : "Saving…");
     this.#scheduleSnapshot();
     if (!this.#failed) this.#scheduleSave(this.#delayMs);
@@ -204,6 +219,7 @@ export class AutosaveController {
   }
 
   #label(): PersistenceLabel {
+    if (this.#recovered) return "Recovered";
     if (this.#failed) return "Save failed";
     return this.#diskRevision === this.#session.revision ? "Saved" : "Saving…";
   }
