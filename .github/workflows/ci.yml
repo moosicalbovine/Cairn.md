@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main, setup/project-foundation, feat/cairn-md-mvp]
@@ -38,3 +39,46 @@ jobs:
         run: npm run build
       - name: Build desktop application
         run: npm run tauri build
+
+  performance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Build release application
+        run: npm run tauri build
+      - name: Record Windows and WebView2 environment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force performance-results | Out-Null
+          $webViewRoot = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'
+          $webViewVersion = if (Test-Path $webViewRoot) {
+            Get-ChildItem $webViewRoot -Directory |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty Name
+          } else {
+            'unavailable'
+          }
+          @{
+            windows = (Get-CimInstance Win32_OperatingSystem).Caption
+            windowsVersion = (Get-CimInstance Win32_OperatingSystem).Version
+            webView2Version = $webViewVersion
+            storageMediaType = (Get-PhysicalDisk | Select-Object -First 1 -ExpandProperty MediaType)
+          } | ConvertTo-Json | Set-Content performance-results\environment.json
+      - name: Measure release performance
+        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
+      - name: Upload raw performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairn-release-performance-${{ github.sha }}
+          path: performance-results/
+          if-no-files-found: warn
+          retention-days: 30
