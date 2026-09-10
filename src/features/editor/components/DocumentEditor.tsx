@@ -1,6 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { readDocument, type DocumentSnapshot } from "../../../lib/tauri/library";
+import {
+  AutosaveController,
+  type PersistenceProgress,
+} from "../persistence/AutosaveController";
 import { EditorSession, type EditorMode } from "../session/EditorSession";
 
 const SourceDocumentEditor = lazy(() =>
@@ -27,14 +31,26 @@ export function DocumentEditor({ document, readOnly = false }: DocumentEditorPro
   const [editor, setEditor] = useState<EditorSession | null>(null);
   const [mode, setMode] = useState<EditorMode>(readOnly ? "source" : "visual");
   const [error, setError] = useState<string | null>(null);
+  const [persistence, setPersistence] = useState<PersistenceProgress | null>(null);
+  const [autosave, setAutosave] = useState<AutosaveController | null>(null);
 
   useEffect(() => {
     let active = true;
     let opened: EditorSession | null = null;
+    let persistenceController: AutosaveController | null = null;
     void readDocument(document.id).then(
       (content) => {
         if (!active) return;
         opened = EditorSession.open(content.bytes);
+        if (!readOnly && !opened.session.isReadOnly) {
+          persistenceController = new AutosaveController({
+            documentId: document.id,
+            session: opened.session,
+            baseFingerprint: content.baseFingerprint,
+            onProgress: setPersistence,
+          });
+          setAutosave(persistenceController);
+        }
         setEditor(opened);
         setMode(readOnly || opened.session.isReadOnly ? "source" : opened.mode);
       },
@@ -44,6 +60,7 @@ export function DocumentEditor({ document, readOnly = false }: DocumentEditorPro
     );
     return () => {
       active = false;
+      void persistenceController?.dispose();
       opened?.dispose();
     };
   }, [document.id, readOnly]);
@@ -58,9 +75,19 @@ export function DocumentEditor({ document, readOnly = false }: DocumentEditorPro
     <div className="document-workspace">
       <header className="document-header">
         <div><span className="pane-kicker">Document</span><h2>{nameOf(document)}</h2></div>
-        <div className="mode-switch" aria-label="Editor mode">
-          <button type="button" data-selected={mode === "visual"} disabled={!editor || editor.session.isReadOnly || readOnly} onClick={() => switchMode("visual")}>Visual</button>
-          <button type="button" data-selected={mode === "source"} disabled={!editor} onClick={() => switchMode("source")}>Source</button>
+        <div className="document-controls">
+          {persistence && (
+            <div className="persistence-state" aria-live="polite">
+              <span data-state={persistence.label}>{persistence.label}</span>
+              {persistence.label === "Save failed" && (
+                <button type="button" onClick={() => autosave?.retry()}>Retry</button>
+              )}
+            </div>
+          )}
+          <div className="mode-switch" aria-label="Editor mode">
+            <button type="button" data-selected={mode === "visual"} disabled={!editor || editor.session.isReadOnly || readOnly} onClick={() => switchMode("visual")}>Visual</button>
+            <button type="button" data-selected={mode === "source"} disabled={!editor} onClick={() => switchMode("source")}>Source</button>
+          </div>
         </div>
       </header>
       {error && <div className="editor-message" role="alert">{error}</div>}
