@@ -54,8 +54,7 @@ export async function createVisualSegmentEditor(
           const replacement = visual.projection.segments.find(
             (segment) =>
               segment.id === activeSegmentId &&
-              segment.kind === "visual" &&
-              segment.source === markdown,
+              segment.kind === "visual",
           );
           if (!replacement) {
             throw new Error("Visual source mapping could not be rebuilt after edit.");

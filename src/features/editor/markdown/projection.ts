@@ -114,6 +114,53 @@ function topLevelNodes(source: string): readonly PositionedNode[] {
   return (tree as PositionedNode).children ?? [];
 }
 
+function semanticNode(node: PositionedNode): string {
+  return JSON.stringify(node, (key, value: unknown) =>
+    key === "position" ? undefined : value,
+  );
+}
+
+export function preserveUnchangedVisualBlocks(
+  original: string,
+  replacement: string,
+): string {
+  const originalNodes = topLevelNodes(original);
+  const replacementNodes = topLevelNodes(replacement);
+  if (
+    originalNodes.length === 0 ||
+    originalNodes.length !== replacementNodes.length
+  ) {
+    return replacement;
+  }
+
+  const edits = originalNodes.flatMap((node, index) => {
+    const replacementNode = replacementNodes[index];
+    const originalRange = nodeRange(node);
+    const replacementRange = replacementNode
+      ? nodeRange(replacementNode)
+      : undefined;
+    if (
+      !replacementNode ||
+      !originalRange ||
+      !replacementRange ||
+      semanticNode(node) === semanticNode(replacementNode)
+    ) {
+      return [];
+    }
+    return [{
+      from: originalRange.from,
+      to: originalRange.to,
+      source: replacement.slice(replacementRange.from, replacementRange.to),
+    }];
+  });
+
+  return edits.reduceRight(
+    (source, edit) =>
+      source.slice(0, edit.from) + edit.source + source.slice(edit.to),
+    original,
+  );
+}
+
 export function createMarkdownProjection(
   source: string,
   revision: number,

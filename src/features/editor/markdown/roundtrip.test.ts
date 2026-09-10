@@ -152,6 +152,38 @@ describe("source-ranged visual projection", () => {
     expect(visual.projection.revision).toBe(1);
   });
 
+  it("preserves the original Markdown spelling of untouched visual blocks", () => {
+    const source =
+      "# Heading #\n\nParagraph with _old_ text.\n\n* first\n* second\n";
+    const session = MarkdownSession.fromSource(source);
+    const visual = new VisualSession(session);
+
+    visual.replaceSegment(
+      "visual:0",
+      "# Heading\n\nParagraph with *new* text.\n\n- first\n- second",
+      0,
+    );
+
+    expect(session.source).toBe(
+      "# Heading #\n\nParagraph with *new* text.\n\n* first\n* second\n",
+    );
+  });
+
+  it("ignores serializer-only normalization when visual meaning did not change", () => {
+    const source = "Paragraph with __bold__ and _emphasis_.\n";
+    const session = MarkdownSession.fromSource(source);
+    const visual = new VisualSession(session);
+
+    visual.replaceSegment(
+      "visual:0",
+      "Paragraph with **bold** and *emphasis*.",
+      0,
+    );
+
+    expect(session.source).toBe(source);
+    expect(session.revision).toBe(0);
+  });
+
   it.each(["", "  \n\t"])("keeps blank Markdown editable in visual mode", (source) => {
     const session = MarkdownSession.fromSource(source);
     const visual = new VisualSession(session);

@@ -1,5 +1,6 @@
 import {
   createMarkdownProjection,
+  preserveUnchangedVisualBlocks,
   type MarkdownProjection,
 } from "../markdown/projection";
 import { MarkdownSession } from "../session/MarkdownSession";
@@ -49,7 +50,7 @@ export class VisualSession {
     this.#session.applyPatch({
       from: segment.from,
       to: segment.to,
-      replacement,
+      replacement: preserveUnchangedVisualBlocks(segment.source, replacement),
       revision,
     });
   }
