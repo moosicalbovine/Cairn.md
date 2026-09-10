@@ -51,7 +51,7 @@ npm ci
 npm run lint
 npm run typecheck
 npm test -- --run
-npm run test:e2e
+npm run test:flows
 npm run test:markdown
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

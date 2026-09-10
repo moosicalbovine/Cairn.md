@@ -48,6 +48,7 @@ jobs:
       - name: Measure release performance
         run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
       - name: Validate current-user installer
+        id: installer-smoke
         if: always()
         shell: pwsh
         run: |
@@ -64,7 +65,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: Upload validated installer
-        if: always()
+        if: steps.installer-smoke.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: cairn-md-validated-installer-${{ github.sha }}

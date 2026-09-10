@@ -10,7 +10,7 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest",
-    "test:e2e": "vitest run tests/e2e",
+    "test:flows": "vitest run tests/e2e",
     "test:markdown": "vitest run src/features/editor/markdown/roundtrip.test.ts tests/e2e/editor-modes.spec.ts",
     "perf": "node --experimental-strip-types tests/performance/startup.ts",
     "perf:startup": "node --experimental-strip-types tests/performance/startup.ts",

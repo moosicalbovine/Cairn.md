@@ -51,6 +51,10 @@ function Resolve-UninstallerPath($entry) {
     return $executable.Groups['path'].Value
 }
 
+if ($null -ne (Find-CairnUninstallEntry)) {
+    throw 'Cairn.md is already installed for this user; use a disposable account or runner'
+}
+
 try {
     $install = Start-Process -FilePath $resolvedInstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
     if ($install.ExitCode -ne 0) {
