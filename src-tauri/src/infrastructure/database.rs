@@ -6,6 +6,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use crate::domain::library::LibraryError;
 
 const MIGRATION_0001: &str = include_str!("../../migrations/0001_library.sql");
+const MIGRATION_0002: &str = include_str!("../../migrations/0002_journal_identity.sql");
 
 pub const DATABASE_FILENAME: &str = "library.sqlite3";
 
@@ -56,12 +57,13 @@ impl Database {
             }
         }
 
-        let version: i64 = match connection.query_row("PRAGMA user_version", [], |row| row.get(0)) {
-            Ok(version) => version,
-            Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
-            Err(error) => return Err(LibraryError::database(error)),
-        };
-        if version > 1 {
+        let mut version: i64 =
+            match connection.query_row("PRAGMA user_version", [], |row| row.get(0)) {
+                Ok(version) => version,
+                Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+                Err(error) => return Err(LibraryError::database(error)),
+            };
+        if version > 2 {
             return Ok(damaged(
                 path,
                 format!("Unsupported metadata schema version {version}"),
@@ -74,6 +76,28 @@ impl Database {
                 Err(error) => return Err(LibraryError::database(error)),
             };
             if let Err(error) = transaction.execute_batch(MIGRATION_0001) {
+                return if existed_with_data {
+                    Ok(damaged(path, format!("Metadata migration failed: {error}")))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            if let Err(error) = transaction.commit() {
+                return if existed_with_data {
+                    Ok(damaged(path, error.to_string()))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            version = 1;
+        }
+        if version < 2 {
+            let transaction = match connection.transaction() {
+                Ok(transaction) => transaction,
+                Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+                Err(error) => return Err(LibraryError::database(error)),
+            };
+            if let Err(error) = transaction.execute_batch(MIGRATION_0002) {
                 return if existed_with_data {
                     Ok(damaged(path, format!("Metadata migration failed: {error}")))
                 } else {
@@ -231,6 +255,8 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
                 "expected_fingerprint",
                 "finalized_fingerprint",
                 "temporary_path",
+                "temporary_identity",
+                "finalized_identity",
                 "created_at",
                 "updated_at",
             ],
@@ -259,7 +285,143 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
         {
             return Ok(false);
         }
+        let schema_sql = connection.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get::<_, String>(0),
+        )?;
+        if !schema_sql.to_ascii_uppercase().contains("STRICT") {
+            return Ok(false);
+        }
+    }
+
+    if !has_unique_index(connection, "projects", &["library_id", "path_key"])?
+        || !has_unique_index(connection, "documents", &["library_id", "path_key"])?
+        || !has_foreign_key(
+            connection,
+            "projects",
+            "library_id",
+            "libraries",
+            "id",
+            "CASCADE",
+        )?
+        || !has_foreign_key(
+            connection,
+            "documents",
+            "library_id",
+            "libraries",
+            "id",
+            "CASCADE",
+        )?
+        || !has_foreign_key(
+            connection,
+            "documents",
+            "project_id",
+            "projects",
+            "id",
+            "CASCADE",
+        )?
+        || !has_foreign_key(
+            connection,
+            "pending_file_operations",
+            "library_id",
+            "libraries",
+            "id",
+            "CASCADE",
+        )?
+    {
+        return Ok(false);
+    }
+
+    for index in [
+        "projects_library_idx",
+        "documents_project_idx",
+        "pending_operations_library_idx",
+    ] {
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [index],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Ok(false);
+        }
+    }
+
+    let phase_check = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_file_operations'",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
+    if [
+        "Intent recorded",
+        "Temporary durable",
+        "Filesystem finalized",
+        "Metadata committed",
+        "Cleanup complete",
+    ]
+    .iter()
+    .any(|phase| !phase_check.contains(phase))
+    {
+        return Ok(false);
+    }
+
+    let foreign_key_violation = connection
+        .query_row("SELECT 1 FROM pragma_foreign_key_check LIMIT 1", [], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if foreign_key_violation.is_some() {
+        return Ok(false);
     }
 
     Ok(true)
+}
+
+fn has_unique_index(
+    connection: &Connection,
+    table: &str,
+    expected_columns: &[&str],
+) -> rusqlite::Result<bool> {
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_index_list(?1) WHERE \"unique\" = 1 ORDER BY name")?;
+    let indexes = statement
+        .query_map([table], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for index in indexes {
+        let mut columns_statement =
+            connection.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+        let columns = columns_statement
+            .query_map([index], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if columns
+            .iter()
+            .map(String::as_str)
+            .eq(expected_columns.iter().copied())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn has_foreign_key(
+    connection: &Connection,
+    table: &str,
+    from_column: &str,
+    target_table: &str,
+    target_column: &str,
+    on_delete: &str,
+) -> rusqlite::Result<bool> {
+    connection
+        .query_row(
+            "SELECT 1 FROM pragma_foreign_key_list(?1) WHERE \"from\" = ?2 AND \"table\" = ?3 AND \"to\" = ?4 AND on_delete = ?5 LIMIT 1",
+            [table, from_column, target_table, target_column, on_delete],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|value| value.is_some())
 }

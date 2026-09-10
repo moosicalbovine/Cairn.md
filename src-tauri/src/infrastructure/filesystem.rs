@@ -155,28 +155,30 @@ fn failed_probe(path: PathBuf, reason: &str, exists: bool) -> CandidateRootProbe
 }
 
 pub fn scan(root: &Path) -> Result<Vec<ScannedProject>, LibraryError> {
-    let canonical_root = canonical_root(root)?;
+    let canonical_root = canonical_root(root).map_err(root_scan_error)?;
     let mut projects = Vec::new();
-    for entry in fs::read_dir(&canonical_root).map_err(LibraryError::io)? {
-        let entry = entry.map_err(LibraryError::io)?;
+    for entry in fs::read_dir(&canonical_root).map_err(root_io_scan_error)? {
+        let entry = entry.map_err(child_io_scan_error)?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || name.eq_ignore_ascii_case(".git") {
             continue;
         }
-        let metadata = entry.metadata().map_err(LibraryError::io)?;
-        if !metadata.is_dir() || is_link_or_reparse(&entry.path())? {
+        let metadata = entry.metadata().map_err(child_io_scan_error)?;
+        if !metadata.is_dir() || is_link_or_reparse(&entry.path()).map_err(child_scan_error)? {
             continue;
         }
-        let canonical_project = fs::canonicalize(entry.path()).map_err(LibraryError::io)?;
-        ensure_below(&canonical_root, &canonical_project)?;
+        let canonical_project = fs::canonicalize(entry.path()).map_err(child_io_scan_error)?;
+        ensure_below(&canonical_root, &canonical_project).map_err(child_scan_error)?;
         let mut documents = Vec::new();
-        for document in fs::read_dir(&canonical_project).map_err(LibraryError::io)? {
-            let document = document.map_err(LibraryError::io)?;
+        for document in fs::read_dir(&canonical_project).map_err(child_io_scan_error)? {
+            let document = document.map_err(child_io_scan_error)?;
             let document_name = document.file_name().to_string_lossy().into_owned();
-            if document_name.starts_with('.') || is_link_or_reparse(&document.path())? {
+            if document_name.starts_with('.')
+                || is_link_or_reparse(&document.path()).map_err(child_scan_error)?
+            {
                 continue;
             }
-            let metadata = document.metadata().map_err(LibraryError::io)?;
+            let metadata = document.metadata().map_err(child_io_scan_error)?;
             let is_markdown = Path::new(&document_name)
                 .extension()
                 .and_then(|extension| extension.to_str())
@@ -184,23 +186,40 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedProject>, LibraryError> {
             if !metadata.is_file() || !is_markdown {
                 continue;
             }
-            let canonical_document = fs::canonicalize(document.path()).map_err(LibraryError::io)?;
-            ensure_below(&canonical_root, &canonical_document)?;
+            let canonical_document =
+                fs::canonicalize(document.path()).map_err(child_io_scan_error)?;
+            ensure_below(&canonical_root, &canonical_document).map_err(child_scan_error)?;
             documents.push(ScannedDocument {
                 relative_path: format!("{name}/{document_name}"),
-                file_identity: file_identity(&canonical_document)?,
-                fingerprint: fingerprint(&canonical_document)?,
+                file_identity: file_identity(&canonical_document).map_err(child_scan_error)?,
+                fingerprint: fingerprint(&canonical_document).map_err(child_scan_error)?,
             });
         }
         documents.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         projects.push(ScannedProject {
             relative_path: name,
-            file_identity: file_identity(&canonical_project)?,
+            file_identity: file_identity(&canonical_project).map_err(child_scan_error)?,
             documents,
         });
     }
     projects.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(projects)
+}
+
+fn root_io_scan_error(error: std::io::Error) -> LibraryError {
+    LibraryError::new("root_unavailable", error.to_string())
+}
+
+fn root_scan_error(error: LibraryError) -> LibraryError {
+    LibraryError::new("root_unavailable", error.to_string())
+}
+
+fn child_io_scan_error(error: std::io::Error) -> LibraryError {
+    LibraryError::new("scan_transient", error.to_string())
+}
+
+fn child_scan_error(error: LibraryError) -> LibraryError {
+    LibraryError::new("scan_transient", error.to_string())
 }
 
 pub fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, LibraryError> {

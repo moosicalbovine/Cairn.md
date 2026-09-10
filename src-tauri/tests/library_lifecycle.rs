@@ -105,7 +105,10 @@ fn live_root_replacement_blocks_mutation_of_the_new_occupant() {
     let error = service.delete_document(&document.id).unwrap_err();
     assert_eq!(error.code(), "root_identity_mismatch");
     assert!(root.join("Alpha/note.md").is_file());
-    assert_eq!(fs::read_to_string(root.join("Alpha/note.md")).unwrap(), "unrelated");
+    assert_eq!(
+        fs::read_to_string(root.join("Alpha/note.md")).unwrap(),
+        "unrelated"
+    );
     assert_eq!(service.snapshot().unwrap().mode, LibraryMode::ReadOnly);
 }
 
@@ -483,6 +486,34 @@ fn replay_mismatch_opens_read_only_and_preserves_pending_evidence() {
 }
 
 #[test]
+fn replay_rejects_an_identical_unowned_final_target() {
+    let app_data = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    service
+        .create_document_interrupted_after_finalize_before_phase_for_test(
+            &project.id,
+            "identity-mismatch.md",
+        )
+        .unwrap();
+    let target = root.path().join("Alpha/identity-mismatch.md");
+    fs::remove_file(&target).unwrap();
+    fs::write(&target, "").unwrap();
+    drop(service);
+
+    let restarted = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = restarted.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::ReadOnly);
+    assert_eq!(
+        snapshot.read_only_reason.as_deref(),
+        Some("journal_recovery_failed")
+    );
+    assert_eq!(restarted.pending_operation_count().unwrap(), 1);
+}
+
+#[test]
 fn startup_rejects_an_unrelated_directory_at_the_bound_path_before_mutating_it() {
     let app_data = TempDir::new().unwrap();
     let container = TempDir::new().unwrap();
@@ -607,6 +638,26 @@ fn incompatible_interrupted_migration_fails_closed_with_evidence() {
         .unwrap()
         .next()
         .is_some());
+}
+
+#[test]
+fn metadata_missing_a_required_index_fails_closed() {
+    let app_data = TempDir::new().unwrap();
+    drop(LibraryService::open(app_data.path()).unwrap());
+    let database_path = app_data.path().join("library.sqlite3");
+    let connection = rusqlite::Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch("DROP INDEX projects_library_idx;")
+        .unwrap();
+    drop(connection);
+
+    let service = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = service.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::ReadOnly);
+    assert_eq!(
+        snapshot.read_only_reason.as_deref(),
+        Some("metadata_damaged")
+    );
 }
 
 #[test]
