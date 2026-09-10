@@ -7,6 +7,7 @@ use crate::domain::library::LibraryError;
 
 const MIGRATION_0001: &str = include_str!("../../migrations/0001_library.sql");
 const MIGRATION_0002: &str = include_str!("../../migrations/0002_journal_identity.sql");
+const MIGRATION_0003: &str = include_str!("../../migrations/0003_tracked_folders.sql");
 
 pub const DATABASE_FILENAME: &str = "library.sqlite3";
 
@@ -63,7 +64,7 @@ impl Database {
                 Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
                 Err(error) => return Err(LibraryError::database(error)),
             };
-        if version > 2 {
+        if version > 3 {
             return Ok(damaged(
                 path,
                 format!("Unsupported metadata schema version {version}"),
@@ -98,6 +99,28 @@ impl Database {
                 Err(error) => return Err(LibraryError::database(error)),
             };
             if let Err(error) = transaction.execute_batch(MIGRATION_0002) {
+                return if existed_with_data {
+                    Ok(damaged(path, format!("Metadata migration failed: {error}")))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            if let Err(error) = transaction.commit() {
+                return if existed_with_data {
+                    Ok(damaged(path, error.to_string()))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            version = 2;
+        }
+        if version < 3 {
+            let transaction = match connection.transaction() {
+                Ok(transaction) => transaction,
+                Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+                Err(error) => return Err(LibraryError::database(error)),
+            };
+            if let Err(error) = transaction.execute_batch(MIGRATION_0003) {
                 return if existed_with_data {
                     Ok(damaged(path, format!("Metadata migration failed: {error}")))
                 } else {
@@ -242,7 +265,16 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
         ),
         (
             "tracked_folders",
-            &["id", "absolute_path", "display_name", "last_scan_at"],
+            &[
+                "id",
+                "absolute_path",
+                "display_name",
+                "last_scan_at",
+                "path_key",
+                "folder_identity",
+                "created_at",
+                "updated_at",
+            ],
         ),
         (
             "pending_file_operations",
@@ -297,6 +329,7 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
 
     if !has_unique_index(connection, "projects", &["library_id", "path_key"])?
         || !has_unique_index(connection, "documents", &["library_id", "path_key"])?
+        || !has_unique_index(connection, "tracked_folders", &["path_key"])?
         || !has_foreign_key(
             connection,
             "projects",

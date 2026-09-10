@@ -72,6 +72,10 @@ pub fn run() {
             commands::library::move_document,
             commands::library::delete_document,
             commands::import::import_markdown,
+            commands::import::add_tracked_folder,
+            commands::import::list_tracked_folders,
+            commands::import::remove_tracked_folder,
+            commands::import::list_tracked_folder_entries,
         ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");

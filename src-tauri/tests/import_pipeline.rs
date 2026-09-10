@@ -11,6 +11,13 @@ fn external(path: PathBuf) -> ImportSource {
     }
 }
 
+fn tracked(tracked_folder_id: &str, relative_path: &str) -> ImportSource {
+    ImportSource::TrackedFile {
+        tracked_folder_id: tracked_folder_id.to_owned(),
+        relative_path: relative_path.to_owned(),
+    }
+}
+
 fn service_and_root() -> (TempDir, TempDir, LibraryService) {
     let app_data = TempDir::new().unwrap();
     let root = TempDir::new().unwrap();
@@ -127,4 +134,121 @@ fn rejects_non_markdown_and_relative_sources_without_creating_metadata() {
     assert_eq!(relative_error.code(), "source_unavailable");
     assert!(service.snapshot().unwrap().projects[0].documents.is_empty());
     assert_eq!(service.pending_operation_count().unwrap(), 0);
+}
+
+#[test]
+fn tracked_folders_are_browsed_lazily_and_import_through_the_same_copy_pipeline() {
+    let (_app_data, root, mut service) = service_and_root();
+    let tracked_root = TempDir::new().unwrap();
+    fs::create_dir(tracked_root.path().join("Planning")).unwrap();
+    fs::write(tracked_root.path().join("overview.md"), "# Overview").unwrap();
+    fs::write(
+        tracked_root.path().join("Planning").join("Proposal.MD"),
+        "# Proposal",
+    )
+    .unwrap();
+    fs::write(tracked_root.path().join("ignore.txt"), "not Markdown").unwrap();
+    let project = service.create_project("Alpha").unwrap();
+
+    let folder = service.add_tracked_folder(tracked_root.path()).unwrap();
+    let folders = service.list_tracked_folders().unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, folder.id);
+    assert!(folders[0].available);
+    assert!(folders[0].last_scan_at.is_none());
+
+    let root_entries = service
+        .list_tracked_folder_entries(&folder.id, None)
+        .unwrap();
+    assert_eq!(root_entries.len(), 2);
+    assert!(root_entries[0].is_directory);
+    assert_eq!(root_entries[0].relative_path, "Planning");
+    assert_eq!(root_entries[1].relative_path, "overview.md");
+    assert!(service.list_tracked_folders().unwrap()[0]
+        .last_scan_at
+        .is_some());
+
+    let nested_entries = service
+        .list_tracked_folder_entries(&folder.id, Some("Planning"))
+        .unwrap();
+    assert_eq!(nested_entries.len(), 1);
+    assert_eq!(nested_entries[0].relative_path, "Planning/Proposal.MD");
+
+    let imported = service
+        .import_document(&project.id, tracked(&folder.id, "Planning/Proposal.MD"))
+        .unwrap();
+    assert_eq!(imported.relative_path, "Alpha/Proposal.MD");
+    assert_eq!(
+        imported.source_path.as_deref(),
+        tracked_root
+            .path()
+            .join("Planning")
+            .join("Proposal.MD")
+            .to_str()
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join(imported.relative_path)).unwrap(),
+        "# Proposal"
+    );
+}
+
+#[test]
+fn tracked_folder_overlap_and_path_traversal_are_rejected() {
+    let (_app_data, root, mut service) = service_and_root();
+    let project = service.create_project("Alpha").unwrap();
+
+    let same_root = service.add_tracked_folder(root.path()).unwrap_err();
+    assert_eq!(same_root.code(), "tracked_folder_overlap");
+    let descendant = service
+        .add_tracked_folder(&root.path().join("Alpha"))
+        .unwrap_err();
+    assert_eq!(descendant.code(), "tracked_folder_overlap");
+    let ancestor = service
+        .add_tracked_folder(root.path().parent().unwrap())
+        .unwrap_err();
+    assert_eq!(ancestor.code(), "tracked_folder_overlap");
+
+    let tracked_root = TempDir::new().unwrap();
+    fs::write(tracked_root.path().join("note.md"), "safe").unwrap();
+    let folder = service.add_tracked_folder(tracked_root.path()).unwrap();
+    let traversal = service
+        .import_document(&project.id, tracked(&folder.id, "../note.md"))
+        .unwrap_err();
+    assert_eq!(traversal.code(), "invalid_path");
+    assert!(service.snapshot().unwrap().projects[0].documents.is_empty());
+}
+
+#[test]
+fn removing_a_tracked_folder_only_removes_app_metadata() {
+    let (_app_data, _root, mut service) = service_and_root();
+    let tracked_root = TempDir::new().unwrap();
+    let source = tracked_root.path().join("keep.md");
+    fs::write(&source, "keep me").unwrap();
+    let folder = service.add_tracked_folder(tracked_root.path()).unwrap();
+
+    service.remove_tracked_folder(&folder.id).unwrap();
+
+    assert!(service.list_tracked_folders().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(source).unwrap(), "keep me");
+    let missing = service.remove_tracked_folder(&folder.id).unwrap_err();
+    assert_eq!(missing.code(), "tracked_folder_not_found");
+}
+
+#[test]
+fn unavailable_tracked_folders_are_reported_without_losing_the_record() {
+    let (_app_data, _root, mut service) = service_and_root();
+    let parent = TempDir::new().unwrap();
+    let tracked_path = parent.path().join("tracked");
+    fs::create_dir(&tracked_path).unwrap();
+    fs::write(tracked_path.join("note.md"), "before").unwrap();
+    let folder = service.add_tracked_folder(&tracked_path).unwrap();
+    fs::remove_dir_all(&tracked_path).unwrap();
+
+    let folders = service.list_tracked_folders().unwrap();
+    assert_eq!(folders.len(), 1);
+    assert!(!folders[0].available);
+    let error = service
+        .list_tracked_folder_entries(&folder.id, None)
+        .unwrap_err();
+    assert_eq!(error.code(), "tracked_folder_unavailable");
 }

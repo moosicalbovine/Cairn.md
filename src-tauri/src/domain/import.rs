@@ -74,3 +74,19 @@ pub fn validate_tracked_relative_path(relative_path: &str) -> Result<PathBuf, Li
     }
     Ok(path)
 }
+
+pub fn absolute_path_key(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
+pub fn is_same_or_descendant(root: &Path, candidate: &Path) -> bool {
+    let root_components = root
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+        .collect::<Vec<_>>();
+    let candidate_components = candidate
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+        .collect::<Vec<_>>();
+    candidate_components.starts_with(&root_components)
+}

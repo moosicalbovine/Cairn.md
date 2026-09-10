@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::domain::import::{collision_name, ImportSource};
+use crate::domain::import::{
+    absolute_path_key, collision_name, is_same_or_descendant, validate_tracked_relative_path,
+    ImportSource, TrackedFolderEntry, TrackedFolderSnapshot,
+};
 use crate::domain::project::{
     document_relative_path, path_key, validate_document_name, validate_project_name,
     validate_relative_path,
@@ -638,12 +641,10 @@ impl LibraryService {
             ImportSource::ExternalPath { absolute_path } => {
                 inspect_markdown_source(&absolute_path)?
             }
-            ImportSource::TrackedFile { .. } => {
-                return Err(LibraryError::new(
-                    "tracked_folder_not_found",
-                    "Tracked folder imports are not configured yet",
-                ));
-            }
+            ImportSource::TrackedFile {
+                tracked_folder_id,
+                relative_path,
+            } => self.resolve_tracked_source(&tracked_folder_id, &relative_path)?,
         };
         let original_name = source
             .resolved_path
@@ -736,6 +737,201 @@ impl LibraryService {
             "destination_busy",
             "Could not allocate an import filename",
         ))
+    }
+
+    pub fn add_tracked_folder(
+        &mut self,
+        path: &Path,
+    ) -> Result<TrackedFolderSnapshot, LibraryError> {
+        let binding = self.required_writable_binding()?;
+        if !path.is_absolute() {
+            return Err(LibraryError::new(
+                "tracked_folder_unavailable",
+                "Tracked folders must use an absolute path",
+            ));
+        }
+        let canonical = fs::canonicalize(path)
+            .map_err(|error| LibraryError::new("tracked_folder_unavailable", error.to_string()))?;
+        if !canonical.is_dir() {
+            return Err(LibraryError::new(
+                "tracked_folder_unavailable",
+                "Tracked folder is not a directory",
+            ));
+        }
+        if is_same_or_descendant(&binding.root_path, &canonical)
+            || is_same_or_descendant(&canonical, &binding.root_path)
+        {
+            return Err(LibraryError::new(
+                "tracked_folder_overlap",
+                "Tracked folders cannot overlap the active library",
+            ));
+        }
+        let folder_identity = file_identity(&canonical)?.ok_or_else(|| {
+            LibraryError::new(
+                "tracked_folder_unavailable",
+                "Tracked folder identity unavailable",
+            )
+        })?;
+        let display_name = canonical
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| path_text(&canonical));
+        let id = Uuid::new_v4().to_string();
+        let now = now_millis();
+        self.database_mut()?.connection_mut().execute(
+            "INSERT INTO tracked_folders (id, absolute_path, display_name, last_scan_at, path_key, folder_identity, created_at, updated_at) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?6)",
+            params![&id, path_text(&canonical), &display_name, absolute_path_key(&canonical), &folder_identity, now],
+        ).map_err(database_conflict)?;
+        Ok(TrackedFolderSnapshot {
+            id,
+            absolute_path: canonical,
+            display_name,
+            available: true,
+            last_scan_at: None,
+        })
+    }
+
+    pub fn list_tracked_folders(&self) -> Result<Vec<TrackedFolderSnapshot>, LibraryError> {
+        let database = self.require_metadata()?;
+        let mut statement = database.connection().prepare(
+            "SELECT id, absolute_path, display_name, folder_identity, last_scan_at FROM tracked_folders ORDER BY lower(display_name), path_key",
+        ).map_err(LibraryError::database)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })
+            .map_err(LibraryError::database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LibraryError::database)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, absolute_path, display_name, expected_identity, last_scan_at)| {
+                    let absolute_path = PathBuf::from(absolute_path);
+                    let available = expected_identity.is_some()
+                        && file_identity(&absolute_path).ok().flatten() == expected_identity;
+                    TrackedFolderSnapshot {
+                        id,
+                        absolute_path,
+                        display_name,
+                        available,
+                        last_scan_at,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    pub fn remove_tracked_folder(&mut self, id: &str) -> Result<(), LibraryError> {
+        let changed = self
+            .database_mut()?
+            .connection_mut()
+            .execute("DELETE FROM tracked_folders WHERE id = ?1", [id])
+            .map_err(LibraryError::database)?;
+        if changed != 1 {
+            return Err(LibraryError::new(
+                "tracked_folder_not_found",
+                "Tracked folder was not found",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn list_tracked_folder_entries(
+        &mut self,
+        folder_id: &str,
+        relative_directory: Option<&str>,
+    ) -> Result<Vec<TrackedFolderEntry>, LibraryError> {
+        let folder = self.tracked_folder_by_id(folder_id)?;
+        self.verify_tracked_folder(&folder)?;
+        let relative_directory = relative_directory.unwrap_or_default();
+        let directory = if relative_directory.is_empty() {
+            folder.absolute_path.clone()
+        } else {
+            let relative = validate_tracked_relative_path(relative_directory)?;
+            fs::canonicalize(folder.absolute_path.join(relative)).map_err(|error| {
+                LibraryError::new("tracked_folder_unavailable", error.to_string())
+            })?
+        };
+        if !directory.is_dir() || !is_same_or_descendant(&folder.absolute_path, &directory) {
+            return Err(LibraryError::new(
+                "tracked_source_escape",
+                "Tracked directory is outside its configured folder",
+            ));
+        }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&directory)
+            .map_err(|error| LibraryError::new("tracked_folder_unavailable", error.to_string()))?
+        {
+            let entry = entry.map_err(|error| {
+                LibraryError::new("tracked_folder_unavailable", error.to_string())
+            })?;
+            let display_name = entry.file_name().to_string_lossy().into_owned();
+            if display_name.starts_with('.') {
+                continue;
+            }
+            let metadata = entry.symlink_metadata().map_err(|error| {
+                LibraryError::new("tracked_folder_unavailable", error.to_string())
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            let canonical = fs::canonicalize(entry.path()).map_err(|error| {
+                LibraryError::new("tracked_folder_unavailable", error.to_string())
+            })?;
+            if !is_same_or_descendant(&folder.absolute_path, &canonical) {
+                continue;
+            }
+            let is_directory = canonical.is_dir();
+            let is_markdown = canonical.is_file()
+                && canonical
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+            if !is_directory && !is_markdown {
+                continue;
+            }
+            let relative_path = canonical
+                .strip_prefix(&folder.absolute_path)
+                .map_err(|_| {
+                    LibraryError::new(
+                        "tracked_source_escape",
+                        "Tracked entry is outside its configured folder",
+                    )
+                })?
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            entries.push(TrackedFolderEntry {
+                relative_path,
+                display_name,
+                is_directory,
+            });
+        }
+        entries.sort_by(|left, right| {
+            right.is_directory.cmp(&left.is_directory).then_with(|| {
+                left.display_name
+                    .to_lowercase()
+                    .cmp(&right.display_name.to_lowercase())
+            })
+        });
+        self.database_mut()?
+            .connection_mut()
+            .execute(
+                "UPDATE tracked_folders SET last_scan_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![now_millis(), folder_id],
+            )
+            .map_err(LibraryError::database)?;
+        Ok(entries)
     }
 
     pub fn create_document_interrupted_for_test(
@@ -1974,6 +2170,68 @@ impl LibraryService {
         Ok(false)
     }
 
+    fn tracked_folder_by_id(&self, id: &str) -> Result<TrackedFolderRecord, LibraryError> {
+        self.require_metadata()?
+            .connection()
+            .query_row(
+                "SELECT absolute_path, folder_identity FROM tracked_folders WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(TrackedFolderRecord {
+                        absolute_path: PathBuf::from(row.get::<_, String>(0)?),
+                        folder_identity: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(LibraryError::database)?
+            .ok_or_else(|| {
+                LibraryError::new("tracked_folder_not_found", "Tracked folder was not found")
+            })
+    }
+
+    fn verify_tracked_folder(&self, folder: &TrackedFolderRecord) -> Result<(), LibraryError> {
+        let actual_identity = file_identity(&folder.absolute_path)
+            .map_err(|error| LibraryError::new("tracked_folder_unavailable", error.to_string()))?;
+        if actual_identity != folder.folder_identity {
+            return Err(LibraryError::new(
+                "tracked_folder_unavailable",
+                "Tracked folder was moved, replaced, or removed",
+            ));
+        }
+        if let Some(binding) = self.binding()? {
+            if is_same_or_descendant(&binding.root_path, &folder.absolute_path)
+                || is_same_or_descendant(&folder.absolute_path, &binding.root_path)
+            {
+                return Err(LibraryError::new(
+                    "tracked_folder_overlap",
+                    "Tracked folder overlaps the active library",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_tracked_source(
+        &self,
+        folder_id: &str,
+        relative_path: &str,
+    ) -> Result<SourceDescriptor, LibraryError> {
+        let folder = self.tracked_folder_by_id(folder_id)?;
+        self.verify_tracked_folder(&folder)?;
+        let relative = validate_tracked_relative_path(relative_path)?;
+        let selected_path = folder.absolute_path.join(relative);
+        let canonical = fs::canonicalize(&selected_path)
+            .map_err(|error| LibraryError::new("tracked_folder_unavailable", error.to_string()))?;
+        if !is_same_or_descendant(&folder.absolute_path, &canonical) {
+            return Err(LibraryError::new(
+                "tracked_source_escape",
+                "Tracked file is outside its configured folder",
+            ));
+        }
+        inspect_markdown_source(&selected_path)
+    }
+
     fn require_metadata(&self) -> Result<&Database, LibraryError> {
         self.database.as_ref().ok_or_else(|| {
             LibraryError::new(
@@ -2048,6 +2306,11 @@ struct DocumentMetadataCommit<'a> {
     disk_fingerprint: &'a str,
     source_path: Option<&'a str>,
     imported_at: Option<i64>,
+}
+
+struct TrackedFolderRecord {
+    absolute_path: PathBuf,
+    folder_identity: Option<String>,
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {
