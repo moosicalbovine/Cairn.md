@@ -292,11 +292,7 @@ fn interrupted_imports_replay_once_at_every_recorded_phase() {
         service.bind_root(root.path()).unwrap();
         let project = service.create_project("Alpha").unwrap();
         service
-            .import_document_interrupted_for_test(
-                &project.id,
-                external(source.clone()),
-                phase,
-            )
+            .import_document_interrupted_for_test(&project.id, external(source.clone()), phase)
             .unwrap();
         assert_eq!(service.pending_operation_count().unwrap(), 1);
         drop(service);
@@ -312,7 +308,12 @@ fn interrupted_imports_replay_once_at_every_recorded_phase() {
         drop(repaired);
 
         let second_restart = LibraryService::open(app_data.path()).unwrap();
-        assert_eq!(second_restart.snapshot().unwrap().projects[0].documents.len(), 1);
+        assert_eq!(
+            second_restart.snapshot().unwrap().projects[0]
+                .documents
+                .len(),
+            1
+        );
         assert_eq!(second_restart.pending_operation_count().unwrap(), 0);
         assert_eq!(fs::read_to_string(&source).unwrap(), "durable import");
     }
