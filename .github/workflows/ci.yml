@@ -35,6 +35,26 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
+      - name: Build desktop WebDriver binary
+        run: npm run tauri build -- --debug --no-bundle
+      - name: Install Tauri WebDriver
+        run: cargo install tauri-driver --version 2.0.6 --locked
+      - name: Install matching Edge WebDriver
+        shell: pwsh
+        run: |
+          $edge = @(
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
+          $version = (Get-Item $edge).VersionInfo.ProductVersion
+          $archive = Join-Path $env:RUNNER_TEMP 'edgedriver.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'edgedriver'
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $destination >> $env:GITHUB_PATH
+      - name: Test Windows desktop flows
+        run: npm run test:desktop
       - name: Build frontend
         run: npm run build
       - name: Build desktop application

@@ -29,6 +29,23 @@ pub fn health_payload() -> HealthResponse {
     }
 }
 
+#[cfg(debug_assertions)]
+fn webdriver_library_root() -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    if std::env::var("CAIRN_WEBDRIVER_MODE").as_deref() != Ok("1") {
+        return Ok(None);
+    }
+    let root = std::env::var_os("CAIRN_WEBDRIVER_LIBRARY_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .ok_or("CAIRN_WEBDRIVER_LIBRARY_ROOT is required in WebDriver mode")?;
+    Ok(Some(root))
+}
+
+#[cfg(not(debug_assertions))]
+fn webdriver_library_root() -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    Ok(None)
+}
+
 #[tauri::command]
 fn health() -> HealthResponse {
     health_payload()
@@ -51,15 +68,22 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let app_data_dir = if commands::performance::performance_mode() {
-                std::env::var_os("CAIRN_APP_DATA_DIR")
-                    .filter(|value| !value.is_empty())
-                    .map(std::path::PathBuf::from)
-                    .ok_or("CAIRN_APP_DATA_DIR is required in performance mode")?
-            } else {
-                app.path().app_local_data_dir()?
-            };
-            let library = LibraryService::open(&app_data_dir)?;
+            let webdriver_root = webdriver_library_root()?;
+            let app_data_dir =
+                if commands::performance::performance_mode() || webdriver_root.is_some() {
+                    std::env::var_os("CAIRN_APP_DATA_DIR")
+                        .filter(|value| !value.is_empty())
+                        .map(std::path::PathBuf::from)
+                        .ok_or("CAIRN_APP_DATA_DIR is required in isolated test mode")?
+                } else {
+                    app.path().app_local_data_dir()?
+                };
+            let mut library = LibraryService::open(&app_data_dir)?;
+            if let Some(root) = webdriver_root {
+                if library.snapshot()?.binding.is_none() {
+                    library.bind_root(&root)?;
+                }
+            }
             app.manage(LibraryState::new(library));
             log::info!("Cairn.md desktop core started");
             Ok(())
