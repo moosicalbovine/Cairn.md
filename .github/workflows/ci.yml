@@ -42,16 +42,20 @@ jobs:
       - name: Install matching Edge WebDriver
         shell: pwsh
         run: |
-          $edge = @(
-            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $edge) { throw 'Microsoft Edge is not installed on the runner' }
-          $version = (Get-Item $edge).VersionInfo.ProductVersion
+          $webViewRoot = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'
+          $version = if (Test-Path $webViewRoot) {
+            Get-ChildItem $webViewRoot -Directory |
+              Where-Object { $_.Name -match '^\d+(\.\d+){1,3}$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty Name
+          }
+          if (-not $version) { throw 'Microsoft Edge WebView2 Runtime is not installed on the runner' }
           $archive = Join-Path $env:RUNNER_TEMP 'edgedriver.zip'
           $destination = Join-Path $env:RUNNER_TEMP 'edgedriver'
           Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          Write-Host "WebView2 Runtime: $version"
+          & (Join-Path $destination 'msedgedriver.exe') --version
           $destination >> $env:GITHUB_PATH
       - name: Test Windows desktop flows
         run: npm run test:desktop

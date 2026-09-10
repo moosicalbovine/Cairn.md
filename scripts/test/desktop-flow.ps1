@@ -126,6 +126,7 @@ try {
     $session = Invoke-Driver -Method Post -Path '/session' -Body @{
         capabilities = @{
             alwaysMatch = @{
+                browserName = 'wry'
                 'tauri:options' = @{ application = $resolvedBinary }
             }
         }
