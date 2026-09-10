@@ -180,8 +180,8 @@ fn tracked_folders_are_browsed_lazily_and_import_through_the_same_copy_pipeline(
     assert_eq!(imported.relative_path, "Alpha/Proposal.MD");
     assert_eq!(
         imported.source_path.as_deref(),
-        tracked_root
-            .path()
+        folder
+            .absolute_path
             .join("Planning")
             .join("Proposal.MD")
             .to_str()
