@@ -878,7 +878,7 @@ impl LibraryService {
             if display_name.starts_with('.') {
                 continue;
             }
-            let metadata = entry.symlink_metadata().map_err(|error| {
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
                 LibraryError::new("tracked_folder_unavailable", error.to_string())
             })?;
             if metadata.file_type().is_symlink() {
