@@ -17,6 +17,9 @@ use crate::domain::project::{
     document_relative_path, path_key, validate_document_name, validate_project_name,
     validate_relative_path,
 };
+use crate::domain::recovery::{
+    validate_snapshot_request, RecoveryLifecycle, RecoverySnapshot, RecoverySnapshotRequest,
+};
 use crate::infrastructure::copy::{
     copy_stable_source, inspect_markdown_source, remove_owned_file, SourceDescriptor,
 };
@@ -650,6 +653,124 @@ impl LibraryService {
             bytes,
             base_fingerprint,
         })
+    }
+
+    pub fn store_recovery_snapshot(
+        &mut self,
+        request: RecoverySnapshotRequest,
+    ) -> Result<RecoverySnapshot, LibraryError> {
+        self.document_by_id(&request.document_id)?;
+        let intended_disk_hash = validate_snapshot_request(&request)?;
+        let durable_at = now_millis();
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        let existing = transaction
+            .query_row(
+                "SELECT session_generation, revision, lifecycle_state FROM recovery_snapshots WHERE document_id = ?1",
+                [&request.document_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(LibraryError::database)?;
+
+        if let Some((generation, revision, lifecycle)) = existing {
+            if generation != request.session_generation {
+                return Err(LibraryError::new(
+                    "recovery_pending",
+                    "A recovery snapshot from another editing session must be resolved first",
+                ));
+            }
+            if RecoveryLifecycle::parse(&lifecycle)? == RecoveryLifecycle::Conflict {
+                return Err(LibraryError::new(
+                    "external_conflict",
+                    "The external-change conflict must be resolved before editing continues",
+                ));
+            }
+            if revision >= request.revision {
+                transaction.commit().map_err(LibraryError::database)?;
+                return self
+                    .load_recovery_snapshot(&request.document_id)?
+                    .ok_or_else(|| {
+                        LibraryError::new(
+                            "recovery_missing",
+                            "Recovery snapshot disappeared while it was being read",
+                        )
+                    });
+            }
+        }
+
+        transaction
+            .execute(
+                "INSERT INTO recovery_snapshots (document_id, session_generation, revision, content, content_hash, base_fingerprint, intended_disk_hash, operation_id, lifecycle_state, durable_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5, NULL, ?7, ?8) ON CONFLICT(document_id) DO UPDATE SET revision = excluded.revision, content = excluded.content, content_hash = excluded.content_hash, base_fingerprint = excluded.base_fingerprint, intended_disk_hash = excluded.intended_disk_hash, operation_id = NULL, lifecycle_state = excluded.lifecycle_state, durable_at = excluded.durable_at",
+                params![
+                    &request.document_id,
+                    &request.session_generation,
+                    request.revision,
+                    &request.bytes,
+                    &intended_disk_hash,
+                    &request.base_fingerprint,
+                    RecoveryLifecycle::Draft.as_str(),
+                    durable_at,
+                ],
+            )
+            .map_err(LibraryError::database)?;
+        transaction.commit().map_err(LibraryError::database)?;
+        self.load_recovery_snapshot(&request.document_id)?
+            .ok_or_else(|| {
+                LibraryError::new("recovery_missing", "Recovery snapshot was not stored")
+            })
+    }
+
+    pub fn load_recovery_snapshot(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<RecoverySnapshot>, LibraryError> {
+        self.document_by_id(document_id)?;
+        query_recovery_snapshot(self.require_metadata()?, document_id)
+    }
+
+    pub fn discard_recovery_snapshot(
+        &mut self,
+        document_id: &str,
+        session_generation: &str,
+    ) -> Result<bool, LibraryError> {
+        self.document_by_id(document_id)?;
+        if Uuid::parse_str(session_generation).is_err() {
+            return Err(LibraryError::new(
+                "recovery_invalid",
+                "Recovery session generation is invalid",
+            ));
+        }
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        let removed = transaction
+            .execute(
+                "DELETE FROM recovery_snapshots WHERE document_id = ?1 AND session_generation = ?2",
+                params![document_id, session_generation],
+            )
+            .map_err(LibraryError::database)?;
+        if removed == 1 {
+            transaction
+                .execute(
+                    "DELETE FROM external_conflicts WHERE document_id = ?1",
+                    [document_id],
+                )
+                .map_err(LibraryError::database)?;
+        }
+        transaction.commit().map_err(LibraryError::database)?;
+        Ok(removed == 1)
     }
 
     pub fn import_document(
@@ -2390,6 +2511,63 @@ struct DocumentMetadataCommit<'a> {
 struct TrackedFolderRecord {
     absolute_path: PathBuf,
     folder_identity: Option<String>,
+}
+
+fn query_recovery_snapshot(
+    database: &Database,
+    document_id: &str,
+) -> Result<Option<RecoverySnapshot>, LibraryError> {
+    database
+        .connection()
+        .query_row(
+            "SELECT document_id, session_generation, revision, content, content_hash, base_fingerprint, intended_disk_hash, operation_id, lifecycle_state, durable_at FROM recovery_snapshots WHERE document_id = ?1",
+            [document_id],
+            |row| {
+                let lifecycle = row.get::<_, String>(8)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    lifecycle,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(LibraryError::database)?
+        .map(
+            |(
+                document_id,
+                session_generation,
+                revision,
+                bytes,
+                content_hash,
+                base_fingerprint,
+                intended_disk_hash,
+                operation_id,
+                lifecycle,
+                durable_at,
+            )| {
+                Ok(RecoverySnapshot {
+                    document_id,
+                    session_generation,
+                    revision,
+                    bytes,
+                    content_hash,
+                    base_fingerprint,
+                    intended_disk_hash,
+                    operation_id,
+                    lifecycle_state: RecoveryLifecycle::parse(&lifecycle)?,
+                    durable_at,
+                })
+            },
+        )
+        .transpose()
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {

@@ -8,6 +8,7 @@ use crate::domain::library::LibraryError;
 const MIGRATION_0001: &str = include_str!("../../migrations/0001_library.sql");
 const MIGRATION_0002: &str = include_str!("../../migrations/0002_journal_identity.sql");
 const MIGRATION_0003: &str = include_str!("../../migrations/0003_tracked_folders.sql");
+const MIGRATION_0004: &str = include_str!("../../migrations/0004_recovery.sql");
 
 pub const DATABASE_FILENAME: &str = "library.sqlite3";
 
@@ -64,7 +65,7 @@ impl Database {
                 Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
                 Err(error) => return Err(LibraryError::database(error)),
             };
-        if version > 3 {
+        if version > 4 {
             return Ok(damaged(
                 path,
                 format!("Unsupported metadata schema version {version}"),
@@ -121,6 +122,28 @@ impl Database {
                 Err(error) => return Err(LibraryError::database(error)),
             };
             if let Err(error) = transaction.execute_batch(MIGRATION_0003) {
+                return if existed_with_data {
+                    Ok(damaged(path, format!("Metadata migration failed: {error}")))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            if let Err(error) = transaction.commit() {
+                return if existed_with_data {
+                    Ok(damaged(path, error.to_string()))
+                } else {
+                    Err(LibraryError::database(error))
+                };
+            }
+            version = 3;
+        }
+        if version < 4 {
+            let transaction = match connection.transaction() {
+                Ok(transaction) => transaction,
+                Err(error) if existed_with_data => return Ok(damaged(path, error.to_string())),
+                Err(error) => return Err(LibraryError::database(error)),
+            };
+            if let Err(error) = transaction.execute_batch(MIGRATION_0004) {
                 return if existed_with_data {
                     Ok(damaged(path, format!("Metadata migration failed: {error}")))
                 } else {
@@ -293,6 +316,33 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
                 "updated_at",
             ],
         ),
+        (
+            "recovery_snapshots",
+            &[
+                "document_id",
+                "session_generation",
+                "revision",
+                "content",
+                "content_hash",
+                "base_fingerprint",
+                "intended_disk_hash",
+                "operation_id",
+                "lifecycle_state",
+                "durable_at",
+            ],
+        ),
+        (
+            "external_conflicts",
+            &[
+                "document_id",
+                "operation_id",
+                "external_bytes",
+                "external_hash",
+                "draft_revision",
+                "draft_hash",
+                "captured_at",
+            ],
+        ),
     ];
 
     for &(table, required_columns) in REQUIRED_TABLES {
@@ -362,6 +412,22 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
             "id",
             "CASCADE",
         )?
+        || !has_foreign_key(
+            connection,
+            "recovery_snapshots",
+            "document_id",
+            "documents",
+            "id",
+            "CASCADE",
+        )?
+        || !has_foreign_key(
+            connection,
+            "external_conflicts",
+            "document_id",
+            "documents",
+            "id",
+            "CASCADE",
+        )?
     {
         return Ok(false);
     }
@@ -370,6 +436,8 @@ fn schema_check(connection: &Connection) -> rusqlite::Result<bool> {
         "projects_library_idx",
         "documents_project_idx",
         "pending_operations_library_idx",
+        "recovery_snapshots_durable_idx",
+        "external_conflicts_captured_idx",
     ] {
         let exists = connection
             .query_row(
