@@ -936,15 +936,15 @@ impl LibraryService {
         if stop_after == JournalPhase::FilesystemFinalized {
             return Ok(None);
         }
-        self.insert_document_metadata(
-            &operation_id,
-            &document_id,
-            &binding.library_id,
+        self.insert_document_metadata(DocumentMetadataCommit {
+            operation_id: &operation_id,
+            document_id: &document_id,
+            library_id: &binding.library_id,
             project_id,
-            &relative,
-            &target,
-            &final_fingerprint,
-        )?;
+            relative_path: &relative,
+            target: &target,
+            disk_fingerprint: &final_fingerprint,
+        })?;
         if stop_after == JournalPhase::MetadataCommitted {
             return Ok(Some(self.document_by_id(&document_id)?));
         }
@@ -1175,15 +1175,15 @@ impl LibraryService {
                         )?;
                     }
                     verify_fingerprint(&target, expected)?;
-                    self.insert_document_metadata(
-                        &id,
-                        &document_id,
-                        &binding.library_id,
-                        &project_id,
-                        &relative_path,
-                        &target,
-                        expected,
-                    )?;
+                    self.insert_document_metadata(DocumentMetadataCommit {
+                        operation_id: &id,
+                        document_id: &document_id,
+                        library_id: &binding.library_id,
+                        project_id: &project_id,
+                        relative_path: &relative_path,
+                        target: &target,
+                        disk_fingerprint: expected,
+                    })?;
                 }
                 OperationPayload::MoveDocument {
                     document_id,
@@ -1338,15 +1338,9 @@ impl LibraryService {
 
     fn insert_document_metadata(
         &mut self,
-        operation_id: &str,
-        id: &str,
-        library_id: &str,
-        project_id: &str,
-        relative_path: &str,
-        target: &Path,
-        disk_fingerprint: &str,
+        commit: DocumentMetadataCommit<'_>,
     ) -> Result<(), LibraryError> {
-        let target_identity = file_identity(target)?;
+        let target_identity = file_identity(commit.target)?;
         let now = now_millis();
         let transaction = self
             .database_mut()?
@@ -1356,7 +1350,7 @@ impl LibraryService {
         let existing = transaction
             .query_row(
                 "SELECT library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, file_identity FROM documents WHERE id = ?1",
-                [id],
+                [commit.document_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -1372,17 +1366,17 @@ impl LibraryService {
             )
             .optional()
             .map_err(LibraryError::database)?;
-        let expected_path_key = path_key(relative_path);
+        let expected_path_key = path_key(commit.relative_path);
         if let Some(existing) = existing {
             if existing
                 != (
-                    library_id.to_owned(),
-                    project_id.to_owned(),
-                    relative_path.to_owned(),
+                    commit.library_id.to_owned(),
+                    commit.project_id.to_owned(),
+                    commit.relative_path.to_owned(),
                     expected_path_key.clone(),
                     None,
                     None,
-                    disk_fingerprint.to_owned(),
+                    commit.disk_fingerprint.to_owned(),
                     target_identity.clone(),
                 )
             {
@@ -1393,13 +1387,17 @@ impl LibraryService {
         } else {
             transaction.execute(
                 "INSERT INTO documents (id, library_id, project_id, relative_path, path_key, source_path, imported_at, disk_fingerprint, disk_revision, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 0, ?7, ?8, ?8)",
-                params![id, library_id, project_id, relative_path, expected_path_key, disk_fingerprint, target_identity, now],
+                params![commit.document_id, commit.library_id, commit.project_id, commit.relative_path, expected_path_key, commit.disk_fingerprint, target_identity, now],
             ).map_err(database_conflict)?;
         }
         transaction
             .execute(
                 "UPDATE pending_file_operations SET phase = ?1, updated_at = ?2 WHERE id = ?3",
-                params![JournalPhase::MetadataCommitted.as_str(), now, operation_id],
+                params![
+                    JournalPhase::MetadataCommitted.as_str(),
+                    now,
+                    commit.operation_id
+                ],
             )
             .map_err(LibraryError::database)?;
         transaction.commit().map_err(LibraryError::database)?;
@@ -1746,6 +1744,16 @@ struct ExistingDocument {
     path_key: String,
     file_identity: Option<String>,
     fingerprint: String,
+}
+
+struct DocumentMetadataCommit<'a> {
+    operation_id: &'a str,
+    document_id: &'a str,
+    library_id: &'a str,
+    project_id: &'a str,
+    relative_path: &'a str,
+    target: &'a Path,
+    disk_fingerprint: &'a str,
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {
