@@ -28,8 +28,28 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+    "publisher": "Cairn.md contributors",
+    "homepage": "https://github.com/moosicalbovine/Cairn.md",
+    "copyright": "Copyright 2026 Cairn.md contributors",
+    "license": "Apache-2.0",
+    "licenseFile": "../LICENSE",
+    "category": "Productivity",
+    "shortDescription": "A fast, local Markdown library and editor for Windows",
+    "longDescription": "Collect, organize, read, and edit portable Markdown files in a lightweight local Windows workspace.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "compression": "lzma"
+      }
+    }
   }
 }
