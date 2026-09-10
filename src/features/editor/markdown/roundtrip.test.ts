@@ -122,10 +122,34 @@ describe("source-ranged visual projection", () => {
       (segment) => segment.kind === "visual" && segment.source === "After.",
     );
     expect(last).toBeDefined();
+    expect(last?.id).toBe("visual:2");
     visual.replaceSegment(last?.id ?? "missing", "Changed after.", 1);
 
     expect(session.source).toContain(opaque);
     expect(session.source).toBe(`Changed before.\n\n${opaque}\n\nChanged after.\n`);
+  });
+
+  it("groups adjacent supported blocks into one stable visual editing region", () => {
+    const session = MarkdownSession.fromSource(
+      "# Heading\n\nFirst paragraph.\n\n- one\n- two\n",
+    );
+    const visual = new VisualSession(session);
+
+    expect(visual.projection.segments).toHaveLength(1);
+    expect(visual.projection.segments[0]).toMatchObject({
+      id: "visual:0",
+      kind: "visual",
+      source: session.source.trimEnd(),
+    });
+
+    visual.replaceSegment(
+      "visual:0",
+      "# Updated\n\nFirst paragraph.\n\n- one\n- two\n- three",
+      0,
+    );
+
+    expect(visual.projection.segments[0]?.id).toBe("visual:0");
+    expect(visual.projection.revision).toBe(1);
   });
 
   it("reparses source edits to unsupported content", () => {

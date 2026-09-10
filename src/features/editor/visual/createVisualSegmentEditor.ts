@@ -24,44 +24,62 @@ export async function createVisualSegmentEditor(
 
   let activeSegmentId = initial.id;
   let activeRevision = visual.projection.revision;
-  let activeFrom = initial.from;
   let lastMarkdown = initial.source;
+  let mappingAvailable = true;
 
-  const editor = await Editor.make()
-    .config((ctx) => {
-      ctx.set(rootCtx, parent);
-      ctx.set(defaultValueCtx, initial.source);
-      ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-        if (markdown === lastMarkdown) {
-          return;
-        }
+  const unsubscribe = visual.subscribe((projection) => {
+    const current = projection.segments.find(
+      (segment) => segment.id === activeSegmentId && segment.kind === "visual",
+    );
+    mappingAvailable = current !== undefined;
+    if (current) {
+      activeRevision = projection.revision;
+    }
+  });
 
-        visual.replaceSegment(activeSegmentId, markdown, activeRevision);
-        const replacement = visual.projection.segments.find(
-          (segment) =>
-            segment.kind === "visual" &&
-            segment.from === activeFrom &&
-            segment.source === markdown,
-        );
-        if (!replacement) {
-          throw new Error("Visual source mapping could not be rebuilt after edit.");
-        }
+  try {
+    const editor = await Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, parent);
+        ctx.set(defaultValueCtx, initial.source);
+        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+          if (markdown === lastMarkdown) {
+            return;
+          }
+          if (!mappingAvailable) {
+            throw new Error("Visual source mapping changed; reopen Visual mode before editing.");
+          }
 
-        activeSegmentId = replacement.id;
-        activeRevision = visual.projection.revision;
-        activeFrom = replacement.from;
-        lastMarkdown = markdown;
-      });
-    })
-    .use(commonmark)
-    .use(gfm)
-    .use(listener)
-    .create();
+          visual.replaceSegment(activeSegmentId, markdown, activeRevision);
+          const replacement = visual.projection.segments.find(
+            (segment) =>
+              segment.id === activeSegmentId &&
+              segment.kind === "visual" &&
+              segment.source === markdown,
+          );
+          if (!replacement) {
+            throw new Error("Visual source mapping could not be rebuilt after edit.");
+          }
 
-  return {
-    editor,
-    async destroy() {
-      await editor.destroy();
-    },
-  };
+          activeSegmentId = replacement.id;
+          activeRevision = visual.projection.revision;
+          lastMarkdown = markdown;
+        });
+      })
+      .use(commonmark)
+      .use(gfm)
+      .use(listener)
+      .create();
+
+    return {
+      editor,
+      async destroy() {
+        unsubscribe();
+        await editor.destroy();
+      },
+    };
+  } catch (error) {
+    unsubscribe();
+    throw error;
+  }
 }

@@ -4,16 +4,22 @@ import {
 } from "../markdown/projection";
 import { MarkdownSession } from "../session/MarkdownSession";
 
+type VisualSessionListener = (projection: MarkdownProjection) => void;
+
 export class VisualSession {
   #projection: MarkdownProjection;
   readonly #session: MarkdownSession;
   readonly #unsubscribe: () => void;
+  readonly #listeners = new Set<VisualSessionListener>();
 
   constructor(session: MarkdownSession) {
     this.#session = session;
     this.#projection = createMarkdownProjection(session.source, session.revision);
     this.#unsubscribe = session.subscribe(({ source, revision }) => {
       this.#projection = createMarkdownProjection(source, revision);
+      for (const listener of this.#listeners) {
+        listener(this.#projection);
+      }
     });
   }
 
@@ -48,7 +54,13 @@ export class VisualSession {
     });
   }
 
+  subscribe(listener: VisualSessionListener): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   dispose(): void {
     this.#unsubscribe();
+    this.#listeners.clear();
   }
 }

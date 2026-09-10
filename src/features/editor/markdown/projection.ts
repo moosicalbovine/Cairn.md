@@ -119,7 +119,7 @@ export function createMarkdownProjection(
   revision: number,
 ): MarkdownProjection {
   const customRanges = customUnsupportedRanges(source);
-  const segments = topLevelNodes(source).flatMap((node, index) => {
+  const rawSegments = topLevelNodes(source).flatMap((node) => {
     const range = nodeRange(node);
     if (!range) {
       return [];
@@ -131,7 +131,7 @@ export function createMarkdownProjection(
 
     return [
       {
-        id: `${revision}:${index}:${range.from}:${range.to}`,
+        id: "",
         kind: sourceBacked ? "source-backed" : "visual",
         from: range.from,
         to: range.to,
@@ -140,6 +140,35 @@ export function createMarkdownProjection(
       } satisfies MarkdownProjectionSegment,
     ];
   });
+
+  const grouped = rawSegments.reduce<Array<Omit<MarkdownProjectionSegment, "id">>>(
+    (segments, segment) => {
+      const previous = segments.at(-1);
+      if (previous?.kind === segment.kind) {
+        segments[segments.length - 1] = {
+          kind: previous.kind,
+          from: previous.from,
+          to: segment.to,
+          source: source.slice(previous.from, segment.to),
+          nodeType: previous.nodeType === segment.nodeType ? previous.nodeType : "blocks",
+        };
+      } else {
+        segments.push({
+          kind: segment.kind,
+          from: segment.from,
+          to: segment.to,
+          source: segment.source,
+          nodeType: segment.nodeType,
+        });
+      }
+      return segments;
+    },
+    [],
+  );
+  const segments = grouped.map((segment, index) => ({
+    ...segment,
+    id: `${segment.kind}:${index}`,
+  }));
 
   return { revision, segments };
 }
