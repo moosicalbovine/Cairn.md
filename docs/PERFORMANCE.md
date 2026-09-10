@@ -17,6 +17,19 @@ No result is marked as passing until raw samples from the reference profile are 
 
 The manually dispatched `Release performance` GitHub Actions workflow runs the same gate on a clean Windows hosted runner and retains its JSON output for 30 days. Release sign-off repeats it on the documented reference machine.
 
+### Hosted-run evidence
+
+Commit `212d621` was measured on a four-logical-processor Windows Server 2025 GitHub runner with 16 GB RAM. The retained artifact is `cairn-release-performance-212d62150538a393c97e3701f8f114a0e2ae9beb`.
+
+| Metric | p50 | p95 | Maximum | Result |
+|---|---:|---:|---:|---|
+| Startup | 1439.1 ms | 3298.5 ms | 8303.9 ms | Failed hosted comparison |
+| Document open | 61.5 ms | 78.7 ms | 80.6 ms | Passed |
+| Input to painted frame | 31.3 ms | 32.1 ms | 32.4 ms | Passed |
+| Idle process-tree working set | 339.5 MB | n/a | n/a | Failed hosted comparison |
+
+This run is comparison evidence, not reference-profile sign-off. It also uses the dedicated editor harness rather than the complete production workspace, so startup, idle memory, recovery termination, and stress integrity remain open release-gate work.
+
 ## Startup and memory measurement
 
 Build the release binary, then run at least 20 independent launches:
