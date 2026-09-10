@@ -75,7 +75,7 @@ fn fingerprint_reader(reader: &mut File) -> Result<String, LibraryError> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("sha256:{digest:x}"))
+    Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
 fn external_change(message: &str) -> LibraryError {
