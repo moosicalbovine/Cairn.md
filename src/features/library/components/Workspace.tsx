@@ -7,6 +7,7 @@ import {
   deleteDocument,
   loadLibraryIndex,
   moveDocument,
+  reconcileLibraryIndex,
   renameDocument,
   renameProject,
   watchLibraryReconciliation,
@@ -71,6 +72,25 @@ export function Workspace({
   const selectedDocument =
     selectedProject?.documents.find((document) => document.id === selectedDocumentId) ?? null;
   const canMutate = snapshot.mode === "writable";
+
+  useEffect(() => {
+    if (initialSnapshot.mode !== "writable") return;
+    let active = true;
+    void reconcileLibraryIndex((nextSnapshot) => {
+      if (active) setSnapshot(nextSnapshot);
+    }).catch((reason: unknown) => {
+      if (active) {
+        setNotice(
+          reason instanceof Error
+            ? reason.message
+            : "The library could not finish its background refresh.",
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [initialSnapshot.mode]);
 
   useEffect(
     () =>

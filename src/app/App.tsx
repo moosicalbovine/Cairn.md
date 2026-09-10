@@ -9,7 +9,10 @@ import {
   type Appearance,
 } from "../features/settings/appearance/appearance";
 import { listTrackedFolders, type TrackedFolderSnapshot } from "../lib/tauri/import";
-import { loadLibraryIndex, type LibrarySnapshot } from "../lib/tauri/library";
+import {
+  loadCachedLibraryIndex,
+  type LibrarySnapshot,
+} from "../lib/tauri/library";
 import { getHealth } from "../lib/tauri/health";
 import "./app.css";
 
@@ -35,10 +38,12 @@ export function App() {
       try {
         await getHealth();
         if (!active) return;
-        const library = await loadLibraryIndex((value) => {
-          if (active) setSnapshot(value);
-        });
-        const tracked = await listTrackedFolders();
+        const [library, tracked] = await Promise.all([
+          loadCachedLibraryIndex((value) => {
+            if (active) setSnapshot(value);
+          }),
+          listTrackedFolders(),
+        ]);
         if (!active) return;
         setSnapshot(library);
         setTrackedFolders(tracked);

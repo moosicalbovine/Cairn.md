@@ -7,6 +7,7 @@ import type { LibrarySnapshot } from "../../src/lib/tauri/library";
 vi.mock("../../src/lib/tauri/library", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/lib/tauri/library")>()),
   watchLibraryReconciliation: vi.fn(() => () => undefined),
+  reconcileLibraryIndex: vi.fn(async () => undefined),
 }));
 vi.mock("../../src/features/library/tracked-folders/trackedFolderBrowser", () => ({
   addChosenTrackedFolder: vi.fn(),

@@ -201,11 +201,24 @@ export function parseRelinkPreview(value: unknown): RelinkPreview {
 export async function loadLibraryIndex(
   renderSnapshot: (snapshot: LibrarySnapshot) => void,
 ): Promise<LibrarySnapshot> {
-  const cached = parseLibrarySnapshot(await invoke<unknown>("library_snapshot"));
-  renderSnapshot(cached);
+  const cached = await loadCachedLibraryIndex(renderSnapshot);
   if (cached.binding === null || cached.mode === "readOnly") {
     return cached;
   }
+  return reconcileLibraryIndex(renderSnapshot);
+}
+
+export async function loadCachedLibraryIndex(
+  renderSnapshot: (snapshot: LibrarySnapshot) => void,
+): Promise<LibrarySnapshot> {
+  const cached = parseLibrarySnapshot(await invoke<unknown>("library_snapshot"));
+  renderSnapshot(cached);
+  return cached;
+}
+
+export async function reconcileLibraryIndex(
+  renderSnapshot: (snapshot: LibrarySnapshot) => void,
+): Promise<LibrarySnapshot> {
   const reconciled = parseLibrarySnapshot(await invoke<unknown>("reconcile_library"));
   renderSnapshot(reconciled);
   return reconciled;

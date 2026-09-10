@@ -4,11 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   confirmLibraryRelink,
   createProject,
+  loadCachedLibraryIndex,
   loadLibraryIndex,
   parseDocumentContent,
   parseLibrarySnapshot,
   previewLibraryRelink,
   readDocument,
+  reconcileLibraryIndex,
   watchLibraryReconciliation,
   type LibrarySnapshot,
   type RelinkPreview,
@@ -42,6 +44,28 @@ describe("library command bridge", () => {
       reconciled,
     );
 
+    expect(rendered).toEqual([snapshot, reconciled]);
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+      "library_snapshot",
+      "reconcile_library",
+    ]);
+  });
+
+  it("can expose the cached index before a separately scheduled reconciliation", async () => {
+    const reconciled = { ...snapshot, projects: [] };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(reconciled);
+    const rendered: LibrarySnapshot[] = [];
+
+    await expect(loadCachedLibraryIndex((value) => rendered.push(value))).resolves.toEqual(
+      snapshot,
+    );
+    expect(rendered).toEqual([snapshot]);
+
+    await expect(reconcileLibraryIndex((value) => rendered.push(value))).resolves.toEqual(
+      reconciled,
+    );
     expect(rendered).toEqual([snapshot, reconciled]);
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
       "library_snapshot",
