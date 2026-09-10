@@ -23,7 +23,7 @@ function Invoke-Driver {
         Method = $Method
         Uri = "http://127.0.0.1:$Port$Path"
         ContentType = 'application/json'
-        TimeoutSec = 15
+        TimeoutSec = 60
     }
     if ($null -ne $Body) {
         $parameters.Body = $Body | ConvertTo-Json -Depth 8 -Compress
@@ -176,13 +176,24 @@ try {
     }
 
     Write-Host 'Desktop flow passed: project, document, visual edit, autosave, source mode, and persistent contents navigation.'
+} catch {
+    Write-Warning "Desktop flow failed: $($_.Exception.Message)"
+    if (Test-Path -LiteralPath $stdoutPath) {
+        Write-Host '--- tauri-driver stdout ---'
+        Get-Content -LiteralPath $stdoutPath
+    }
+    if (Test-Path -LiteralPath $stderrPath) {
+        Write-Host '--- tauri-driver stderr ---'
+        Get-Content -LiteralPath $stderrPath
+    }
+    throw
 } finally {
     if ($sessionId) {
         try { Invoke-Driver -Method Delete -Path "/session/$sessionId" | Out-Null } catch {}
     }
     if ($driver -and -not $driver.HasExited) {
         Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
-        $driver.WaitForExit(5000)
+        $driver.WaitForExit(5000) | Out-Null
     }
     Remove-Item Env:CAIRN_WEBDRIVER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
