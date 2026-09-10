@@ -634,6 +634,46 @@ impl LibraryService {
         project_id: &str,
         source: ImportSource,
     ) -> Result<DocumentSnapshot, LibraryError> {
+        self.import_document_through_phase(
+            project_id,
+            source,
+            JournalPhase::CleanupComplete,
+            false,
+        )?
+        .ok_or_else(|| LibraryError::new("journal_incomplete", "Import was not committed"))
+    }
+
+    pub fn import_document_interrupted_for_test(
+        &mut self,
+        project_id: &str,
+        source: ImportSource,
+        stop_after: JournalPhase,
+    ) -> Result<(), LibraryError> {
+        self.import_document_through_phase(project_id, source, stop_after, false)?;
+        Ok(())
+    }
+
+    pub fn import_document_interrupted_after_finalize_before_phase_for_test(
+        &mut self,
+        project_id: &str,
+        source: ImportSource,
+    ) -> Result<(), LibraryError> {
+        self.import_document_through_phase(
+            project_id,
+            source,
+            JournalPhase::FilesystemFinalized,
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn import_document_through_phase(
+        &mut self,
+        project_id: &str,
+        source: ImportSource,
+        stop_after: JournalPhase,
+        finalize_before_phase: bool,
+    ) -> Result<Option<DocumentSnapshot>, LibraryError> {
         let binding = self.required_writable_binding()?;
         let project = self.project_by_id(project_id)?;
         self.verified_project_path(&binding, project_id, &project.relative_path)?;
@@ -684,6 +724,9 @@ impl LibraryService {
                 Some(&temporary_relative),
                 Some(&source.fingerprint),
             )?;
+            if stop_after == JournalPhase::IntentRecorded {
+                return Ok(None);
+            }
             let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
             let copied = match copy_stable_source(&source, &temporary) {
                 Ok(copied) => copied,
@@ -698,6 +741,9 @@ impl LibraryService {
                 None,
                 Some(&copied.identity),
             )?;
+            if stop_after == JournalPhase::TemporaryDurable {
+                return Ok(None);
+            }
             self.verify_active_root(&binding)?;
             self.verified_project_path(&binding, project_id, &project.relative_path)?;
             let target = resolve_new(&binding.root_path, &relative)?;
@@ -711,6 +757,9 @@ impl LibraryService {
                 Err(error) => return Err(LibraryError::io(error)),
             }
             sync_parent(&target)?;
+            if finalize_before_phase {
+                return Ok(None);
+            }
             let target_identity = file_identity(&target)?;
             self.update_operation(
                 &operation_id,
@@ -718,6 +767,9 @@ impl LibraryService {
                 Some(&copied.fingerprint),
                 target_identity.as_deref(),
             )?;
+            if stop_after == JournalPhase::FilesystemFinalized {
+                return Ok(None);
+            }
             self.insert_document_metadata(DocumentMetadataCommit {
                 operation_id: &operation_id,
                 document_id: &document_id,
@@ -729,8 +781,12 @@ impl LibraryService {
                 source_path: Some(&source.provenance_path),
                 imported_at: Some(imported_at),
             })?;
+            let document = self.document_by_id(&document_id)?;
+            if stop_after == JournalPhase::MetadataCommitted {
+                return Ok(Some(document));
+            }
             self.finish_operation(&operation_id)?;
-            return self.document_by_id(&document_id);
+            return Ok(Some(document));
         }
 
         Err(LibraryError::new(

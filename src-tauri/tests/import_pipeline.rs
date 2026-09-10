@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use cairn_md_lib::domain::import::ImportSource;
-use cairn_md_lib::domain::library::LibraryService;
+use cairn_md_lib::domain::library::{JournalPhase, LibraryService};
+use cairn_md_lib::infrastructure::copy::{copy_stable_source, inspect_markdown_source};
 use tempfile::TempDir;
 
 fn external(path: PathBuf) -> ImportSource {
@@ -251,4 +252,93 @@ fn unavailable_tracked_folders_are_reported_without_losing_the_record() {
         .list_tracked_folder_entries(&folder.id, None)
         .unwrap_err();
     assert_eq!(error.code(), "tracked_folder_unavailable");
+}
+
+#[test]
+fn changed_or_disappearing_sources_leave_no_partial_copy() {
+    let sources = TempDir::new().unwrap();
+    let source = sources.path().join("note.md");
+    let changed_target = sources.path().join("changed-copy.tmp");
+    fs::write(&source, "before").unwrap();
+    let changed_descriptor = inspect_markdown_source(&source).unwrap();
+    fs::write(&source, "after").unwrap();
+
+    let changed = copy_stable_source(&changed_descriptor, &changed_target).unwrap_err();
+    assert_eq!(changed.code(), "source_changed");
+    assert!(!changed_target.exists());
+
+    let missing_target = sources.path().join("missing-copy.tmp");
+    let missing_descriptor = inspect_markdown_source(&source).unwrap();
+    fs::remove_file(&source).unwrap();
+    let missing = copy_stable_source(&missing_descriptor, &missing_target).unwrap_err();
+    assert_eq!(missing.code(), "source_unreadable");
+    assert!(!missing_target.exists());
+}
+
+#[test]
+fn interrupted_imports_replay_once_at_every_recorded_phase() {
+    for phase in [
+        JournalPhase::IntentRecorded,
+        JournalPhase::TemporaryDurable,
+        JournalPhase::FilesystemFinalized,
+        JournalPhase::MetadataCommitted,
+    ] {
+        let app_data = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let sources = TempDir::new().unwrap();
+        let source = sources.path().join("note.md");
+        fs::write(&source, "durable import").unwrap();
+        let mut service = LibraryService::open(app_data.path()).unwrap();
+        service.bind_root(root.path()).unwrap();
+        let project = service.create_project("Alpha").unwrap();
+        service
+            .import_document_interrupted_for_test(
+                &project.id,
+                external(source.clone()),
+                phase,
+            )
+            .unwrap();
+        assert_eq!(service.pending_operation_count().unwrap(), 1);
+        drop(service);
+
+        let repaired = LibraryService::open(app_data.path()).unwrap();
+        let snapshot = repaired.snapshot().unwrap();
+        assert_eq!(snapshot.projects[0].documents.len(), 1, "phase {phase:?}");
+        assert_eq!(
+            fs::read_to_string(root.path().join("Alpha/note.md")).unwrap(),
+            "durable import"
+        );
+        assert_eq!(repaired.pending_operation_count().unwrap(), 0);
+        drop(repaired);
+
+        let second_restart = LibraryService::open(app_data.path()).unwrap();
+        assert_eq!(second_restart.snapshot().unwrap().projects[0].documents.len(), 1);
+        assert_eq!(second_restart.pending_operation_count().unwrap(), 0);
+        assert_eq!(fs::read_to_string(&source).unwrap(), "durable import");
+    }
+}
+
+#[test]
+fn import_replays_when_finalized_before_the_phase_update() {
+    let app_data = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let sources = TempDir::new().unwrap();
+    let source = sources.path().join("note.md");
+    fs::write(&source, "finalized import").unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(root.path()).unwrap();
+    let project = service.create_project("Alpha").unwrap();
+    service
+        .import_document_interrupted_after_finalize_before_phase_for_test(
+            &project.id,
+            external(source),
+        )
+        .unwrap();
+    assert!(root.path().join("Alpha/note.md").is_file());
+    assert!(service.snapshot().unwrap().projects[0].documents.is_empty());
+    drop(service);
+
+    let repaired = LibraryService::open(app_data.path()).unwrap();
+    assert_eq!(repaired.snapshot().unwrap().projects[0].documents.len(), 1);
+    assert_eq!(repaired.pending_operation_count().unwrap(), 0);
 }
