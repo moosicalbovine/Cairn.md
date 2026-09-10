@@ -60,18 +60,18 @@ npm run tauri build
 ```
 
 `test:flows` is the fast mocked integration suite. The real desktop smoke flow is
-Windows-only and additionally requires `tauri-driver` 2.0.6 plus a Microsoft Edge
-WebDriver matching the installed Edge version. Build and run it with:
+Windows-only and additionally requires Microsoft Edge WebDriver matching the
+installed WebView2 Runtime on `PATH`. Build and run it with:
 
 ```powershell
 npm run tauri build -- --debug --no-bundle
-cargo install tauri-driver --version 2.0.6 --locked
 npm run test:desktop
 ```
 
-CI downloads the matching Edge WebDriver automatically. The desktop harness uses
-an isolated temporary library and app-data directory, and never opens the user's
-configured Cairn.md library.
+CI downloads the matching Edge WebDriver automatically. The desktop harness
+drives its W3C protocol directly and uses isolated temporary library, app-data,
+and WebView2 user-data directories. It never opens the user's configured Cairn.md
+library.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing persistence or filesystem behavior. Those paths fail closed intentionally and require fault-injection coverage.
 

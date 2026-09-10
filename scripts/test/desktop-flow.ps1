@@ -4,12 +4,13 @@ $ErrorActionPreference = 'Stop'
 $port = 4444
 $elementKey = 'element-6066-11e4-a52e-4f735466cecf'
 $resolvedBinary = (Resolve-Path -LiteralPath $BinaryPath).Path
-$driverCommand = Get-Command 'tauri-driver' -ErrorAction Stop
+$driverCommand = Get-Command 'msedgedriver' -ErrorAction Stop
 $testBase = Join-Path ([IO.Path]::GetTempPath()) ("cairn-webdriver-" + [Guid]::NewGuid().ToString('N'))
 $appData = Join-Path $testBase 'app-data'
 $libraryRoot = Join-Path $testBase 'library'
-$stdoutPath = Join-Path $testBase 'tauri-driver.stdout.log'
-$stderrPath = Join-Path $testBase 'tauri-driver.stderr.log'
+$webviewData = Join-Path $testBase 'webview-data'
+$stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
+$stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
 $driver = $null
 $sessionId = $null
 
@@ -41,7 +42,7 @@ function Wait-Driver {
             Start-Sleep -Milliseconds 250
         }
     }
-    throw 'tauri-driver did not become ready within 30 seconds.'
+    throw 'Microsoft Edge WebDriver did not become ready within 30 seconds.'
 }
 
 function Find-Element {
@@ -113,12 +114,14 @@ function Wait-ElementText {
 }
 
 try {
-    New-Item -ItemType Directory -Path $appData, $libraryRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $appData, $libraryRoot, $webviewData -Force | Out-Null
     $env:CAIRN_WEBDRIVER_MODE = '1'
     $env:CAIRN_APP_DATA_DIR = $appData
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
+    $env:TAURI_WEBVIEW_AUTOMATION = 'true'
 
     $driver = Start-Process -FilePath $driverCommand.Source `
+        -ArgumentList "--port=$port", '--host=127.0.0.1', '--verbose' `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
         -WindowStyle Hidden -PassThru
     Wait-Driver
@@ -126,8 +129,13 @@ try {
     $session = Invoke-Driver -Method Post -Path '/session' -Body @{
         capabilities = @{
             alwaysMatch = @{
-                browserName = 'wry'
-                'tauri:options' = @{ application = $resolvedBinary }
+                browserName = 'webview2'
+                'ms:edgeChromium' = $true
+                'ms:edgeOptions' = @{
+                    binary = $resolvedBinary
+                    args = @()
+                    webviewOptions = @{ userDataFolder = $webviewData }
+                }
             }
         }
     }
@@ -180,11 +188,11 @@ try {
 } catch {
     Write-Warning "Desktop flow failed: $($_.Exception.Message)"
     if (Test-Path -LiteralPath $stdoutPath) {
-        Write-Host '--- tauri-driver stdout ---'
+        Write-Host '--- Microsoft Edge WebDriver stdout ---'
         Get-Content -LiteralPath $stdoutPath
     }
     if (Test-Path -LiteralPath $stderrPath) {
-        Write-Host '--- tauri-driver stderr ---'
+        Write-Host '--- Microsoft Edge WebDriver stderr ---'
         Get-Content -LiteralPath $stderrPath
     }
     throw
@@ -199,6 +207,7 @@ try {
     Remove-Item Env:CAIRN_WEBDRIVER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_LIBRARY_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
     $resolvedBase = [IO.Path]::GetFullPath($testBase)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if ($resolvedBase.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and

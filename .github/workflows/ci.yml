@@ -37,8 +37,6 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
       - name: Build desktop WebDriver binary
         run: npm run tauri build -- --debug --no-bundle
-      - name: Install Tauri WebDriver
-        run: cargo install tauri-driver --version 2.0.6 --locked
       - name: Install matching Edge WebDriver
         shell: pwsh
         run: |

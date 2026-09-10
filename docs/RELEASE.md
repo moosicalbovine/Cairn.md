@@ -16,7 +16,6 @@ npm run lint
 npm run typecheck
 npm test -- --run
 npm run test:flows
-cargo install tauri-driver --version 2.0.6 --locked
 npm run tauri build -- --debug --no-bundle
 npm run test:desktop
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
