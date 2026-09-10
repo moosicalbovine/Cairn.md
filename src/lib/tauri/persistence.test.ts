@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRecoverySnapshot } from "./persistence";
+import { parseRecoverySnapshot, parseSaveDocumentResult } from "./persistence";
 
 describe("recovery command boundary", () => {
   it("accepts a complete snapshot and restores its bytes", () => {
@@ -36,5 +36,26 @@ describe("recovery command boundary", () => {
         durableAt: 42,
       }),
     ).toThrow(/recovery snapshot/i);
+  });
+
+  it("accepts only saved or conflict disk outcomes", () => {
+    expect(
+      parseSaveDocumentResult({
+        status: "saved",
+        revision: 4,
+        diskFingerprint: `sha256:${"c".repeat(64)}`,
+      }),
+    ).toEqual({
+      status: "saved",
+      revision: 4,
+      diskFingerprint: `sha256:${"c".repeat(64)}`,
+    });
+    expect(() =>
+      parseSaveDocumentResult({
+        status: "pending",
+        revision: 4,
+        diskFingerprint: "hash",
+      }),
+    ).toThrow(/save result/i);
   });
 });

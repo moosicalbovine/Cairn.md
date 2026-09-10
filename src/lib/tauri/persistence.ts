@@ -23,6 +23,12 @@ export type RecoverySnapshot = Readonly<{
   durableAt: number;
 }>;
 
+export type SaveDocumentResult = Readonly<{
+  status: "saved" | "conflict";
+  revision: number;
+  diskFingerprint: string;
+}>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -74,6 +80,23 @@ export function parseRecoverySnapshot(value: unknown): RecoverySnapshot {
   };
 }
 
+export function parseSaveDocumentResult(value: unknown): SaveDocumentResult {
+  if (
+    !isRecord(value) ||
+    (value.status !== "saved" && value.status !== "conflict") ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) <= 0 ||
+    typeof value.diskFingerprint !== "string"
+  ) {
+    throw new Error("Invalid save result");
+  }
+  return {
+    status: value.status,
+    revision: value.revision as number,
+    diskFingerprint: value.diskFingerprint,
+  };
+}
+
 export async function storeRecoverySnapshot(
   request: RecoverySnapshotRequest,
 ): Promise<RecoverySnapshot> {
@@ -99,4 +122,14 @@ export function discardRecoverySnapshot(
     documentId,
     sessionGeneration,
   });
+}
+
+export async function saveDocument(
+  request: RecoverySnapshotRequest,
+): Promise<SaveDocumentResult> {
+  return parseSaveDocumentResult(
+    await invoke<unknown>("save_document", {
+      request: { ...request, bytes: Array.from(request.bytes) },
+    }),
+  );
 }

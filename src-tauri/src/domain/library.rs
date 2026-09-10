@@ -19,7 +19,9 @@ use crate::domain::project::{
 };
 use crate::domain::recovery::{
     validate_snapshot_request, RecoveryLifecycle, RecoverySnapshot, RecoverySnapshotRequest,
+    SaveDocumentResult, SaveStatus,
 };
+use crate::infrastructure::atomic_write::replace_if_unchanged;
 use crate::infrastructure::copy::{
     copy_stable_source, inspect_markdown_source, remove_owned_file, SourceDescriptor,
 };
@@ -228,6 +230,14 @@ enum OperationPayload {
         source_identity: String,
         source_fingerprint: String,
         imported_at: i64,
+    },
+    SaveDocument {
+        document_id: String,
+        relative_path: String,
+        session_generation: String,
+        revision: i64,
+        intended_fingerprint: String,
+        backup_relative_path: String,
     },
 }
 
@@ -669,20 +679,22 @@ impl LibraryService {
             .map_err(LibraryError::database)?;
         let existing = transaction
             .query_row(
-                "SELECT session_generation, revision, lifecycle_state FROM recovery_snapshots WHERE document_id = ?1",
+                "SELECT session_generation, revision, lifecycle_state, content_hash, base_fingerprint FROM recovery_snapshots WHERE document_id = ?1",
                 [&request.document_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 },
             )
             .optional()
             .map_err(LibraryError::database)?;
 
-        if let Some((generation, revision, lifecycle)) = existing {
+        if let Some((generation, revision, lifecycle, content_hash, base_fingerprint)) = existing {
             if generation != request.session_generation {
                 return Err(LibraryError::new(
                     "recovery_pending",
@@ -695,7 +707,7 @@ impl LibraryService {
                     "The external-change conflict must be resolved before editing continues",
                 ));
             }
-            if revision >= request.revision {
+            if revision > request.revision {
                 transaction.commit().map_err(LibraryError::database)?;
                 return self
                     .load_recovery_snapshot(&request.document_id)?
@@ -705,6 +717,27 @@ impl LibraryService {
                             "Recovery snapshot disappeared while it was being read",
                         )
                     });
+            }
+            if revision == request.revision {
+                if content_hash != intended_disk_hash {
+                    return Err(LibraryError::new(
+                        "recovery_revision_collision",
+                        "One recovery revision cannot represent different document bytes",
+                    ));
+                }
+                if base_fingerprint == request.base_fingerprint
+                    || RecoveryLifecycle::parse(&lifecycle)? != RecoveryLifecycle::Draft
+                {
+                    transaction.commit().map_err(LibraryError::database)?;
+                    return self
+                        .load_recovery_snapshot(&request.document_id)?
+                        .ok_or_else(|| {
+                            LibraryError::new(
+                                "recovery_missing",
+                                "Recovery snapshot disappeared while it was being read",
+                            )
+                        });
+                }
             }
         }
 
@@ -771,6 +804,188 @@ impl LibraryService {
         }
         transaction.commit().map_err(LibraryError::database)?;
         Ok(removed == 1)
+    }
+
+    pub fn save_document(
+        &mut self,
+        request: RecoverySnapshotRequest,
+    ) -> Result<SaveDocumentResult, LibraryError> {
+        let intended_fingerprint = validate_snapshot_request(&request)?;
+        let snapshot = self
+            .load_recovery_snapshot(&request.document_id)?
+            .ok_or_else(|| {
+                LibraryError::new(
+                    "recovery_missing",
+                    "A durable recovery snapshot is required before saving",
+                )
+            })?;
+        if snapshot.session_generation != request.session_generation
+            || snapshot.revision != request.revision
+            || snapshot.bytes != request.bytes
+            || snapshot.base_fingerprint != request.base_fingerprint
+            || snapshot.intended_disk_hash != intended_fingerprint
+        {
+            return Err(LibraryError::new(
+                "recovery_mismatch",
+                "The save request does not match its durable recovery snapshot",
+            ));
+        }
+
+        let binding = self.required_writable_binding()?;
+        let document = self.document_by_id(&request.document_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
+        let project = self.project_for_document(&request.document_id)?;
+        self.verified_project_path(&binding, &project.id, &project.relative_path)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let temporary_relative = document_relative_path(
+            &project.relative_path,
+            &format!(".cairn-save-{operation_id}.tmp"),
+        );
+        let backup_relative = document_relative_path(
+            &project.relative_path,
+            &format!(".cairn-save-{operation_id}.backup"),
+        );
+        let payload = OperationPayload::SaveDocument {
+            document_id: request.document_id.clone(),
+            relative_path: document.relative_path,
+            session_generation: request.session_generation.clone(),
+            revision: request.revision,
+            intended_fingerprint: intended_fingerprint.clone(),
+            backup_relative_path: backup_relative,
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "save_document",
+            &payload,
+            Some(&temporary_relative),
+            Some(&request.base_fingerprint),
+        )?;
+        self.database_mut()?.connection_mut().execute(
+            "UPDATE recovery_snapshots SET operation_id = ?1, lifecycle_state = ?2 WHERE document_id = ?3 AND session_generation = ?4 AND revision = ?5",
+            params![
+                &operation_id,
+                RecoveryLifecycle::Saving.as_str(),
+                &request.document_id,
+                &request.session_generation,
+                request.revision,
+            ],
+        ).map_err(LibraryError::database)?;
+        self.replay_pending_operations()?;
+
+        if let Some(external_hash) = self.external_conflict_hash(&request.document_id)? {
+            return Ok(SaveDocumentResult {
+                status: SaveStatus::Conflict,
+                revision: request.revision,
+                disk_fingerprint: external_hash,
+            });
+        }
+        let saved = self.document_by_id(&request.document_id)?;
+        if saved.disk_fingerprint != intended_fingerprint {
+            return Err(LibraryError::new(
+                "save_verification_failed",
+                "Saved metadata does not match the intended document bytes",
+            ));
+        }
+        Ok(SaveDocumentResult {
+            status: SaveStatus::Saved,
+            revision: request.revision,
+            disk_fingerprint: saved.disk_fingerprint,
+        })
+    }
+
+    fn record_external_conflict(
+        &mut self,
+        operation_id: &str,
+        document_id: &str,
+        snapshot: &RecoverySnapshot,
+        target: &Path,
+    ) -> Result<(), LibraryError> {
+        let (external_bytes, external_hash) = match fs::read(target) {
+            Ok(bytes) => {
+                let hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+                (bytes, hash)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                (Vec::new(), "missing".to_owned())
+            }
+            Err(error) => return Err(LibraryError::io(error)),
+        };
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        transaction.execute(
+            "INSERT INTO external_conflicts (document_id, operation_id, external_bytes, external_hash, draft_revision, draft_hash, captured_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(document_id) DO UPDATE SET operation_id = excluded.operation_id, external_bytes = excluded.external_bytes, external_hash = excluded.external_hash, draft_revision = excluded.draft_revision, draft_hash = excluded.draft_hash, captured_at = excluded.captured_at",
+            params![
+                document_id,
+                operation_id,
+                external_bytes,
+                external_hash,
+                snapshot.revision,
+                &snapshot.intended_disk_hash,
+                now_millis(),
+            ],
+        ).map_err(LibraryError::database)?;
+        transaction.execute(
+            "UPDATE recovery_snapshots SET operation_id = ?1, lifecycle_state = ?2 WHERE document_id = ?3 AND session_generation = ?4 AND revision = ?5",
+            params![operation_id, RecoveryLifecycle::Conflict.as_str(), document_id, &snapshot.session_generation, snapshot.revision],
+        ).map_err(LibraryError::database)?;
+        transaction.commit().map_err(LibraryError::database)
+    }
+
+    fn commit_saved_document(
+        &mut self,
+        operation_id: &str,
+        document_id: &str,
+        session_generation: &str,
+        revision: i64,
+        intended_fingerprint: &str,
+        target_identity: Option<&str>,
+    ) -> Result<(), LibraryError> {
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        let changed = transaction.execute(
+            "UPDATE documents SET disk_fingerprint = ?1, disk_revision = ?2, file_identity = ?3, updated_at = ?4 WHERE id = ?5",
+            params![intended_fingerprint, revision, target_identity, now_millis(), document_id],
+        ).map_err(LibraryError::database)?;
+        if changed != 1 {
+            return Err(LibraryError::new(
+                "document_not_found",
+                "Saved document metadata is missing",
+            ));
+        }
+        let cleared = transaction.execute(
+            "DELETE FROM recovery_snapshots WHERE document_id = ?1 AND session_generation = ?2 AND revision = ?3 AND intended_disk_hash = ?4",
+            params![document_id, session_generation, revision, intended_fingerprint],
+        ).map_err(LibraryError::database)?;
+        if cleared != 1 {
+            return Err(LibraryError::new(
+                "recovery_mismatch",
+                "The durable recovery snapshot changed before metadata commit",
+            ));
+        }
+        transaction
+            .execute(
+                "DELETE FROM external_conflicts WHERE document_id = ?1",
+                [document_id],
+            )
+            .map_err(LibraryError::database)?;
+        transaction
+            .execute(
+                "UPDATE pending_file_operations SET phase = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    JournalPhase::MetadataCommitted.as_str(),
+                    now_millis(),
+                    operation_id
+                ],
+            )
+            .map_err(LibraryError::database)?;
+        transaction.commit().map_err(LibraryError::database)
     }
 
     pub fn import_document(
@@ -1521,6 +1736,24 @@ impl LibraryService {
                 continue;
             }
             if phase == JournalPhase::MetadataCommitted {
+                if let Ok(OperationPayload::SaveDocument {
+                    intended_fingerprint,
+                    backup_relative_path,
+                    ..
+                }) = serde_json::from_str::<OperationPayload>(&payload_json)
+                {
+                    let temporary_relative = temporary_path.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Save operation has no temporary path")
+                    })?;
+                    validate_relative_path(temporary_relative, 2)?;
+                    validate_relative_path(&backup_relative_path, 2)?;
+                    let temporary = resolve_new(&binding.root_path, temporary_relative)?;
+                    let backup = resolve_new(&binding.root_path, &backup_relative_path)?;
+                    cleanup_owned_artifact(&temporary, &intended_fingerprint)?;
+                    if let Some(expected) = expected_fingerprint.as_deref() {
+                        cleanup_owned_artifact(&backup, expected)?;
+                    }
+                }
                 self.finish_operation(&id)?;
                 continue;
             }
@@ -1832,6 +2065,143 @@ impl LibraryService {
                         source_path: Some(&source_path),
                         imported_at: Some(imported_at),
                     })?;
+                }
+                OperationPayload::SaveDocument {
+                    document_id,
+                    relative_path,
+                    session_generation,
+                    revision,
+                    intended_fingerprint,
+                    backup_relative_path,
+                } => {
+                    validate_relative_path(&relative_path, 2)?;
+                    validate_relative_path(&backup_relative_path, 2)?;
+                    let temporary_relative = temporary_path.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Save operation has no temporary path")
+                    })?;
+                    validate_relative_path(temporary_relative, 2)?;
+                    let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Save operation has no base hash")
+                    })?;
+                    let temporary = resolve_new(&binding.root_path, temporary_relative)?;
+                    let backup = resolve_new(&binding.root_path, &backup_relative_path)?;
+                    let target = resolve_new(&binding.root_path, &relative_path)?;
+                    let snapshot = self.load_recovery_snapshot(&document_id)?.ok_or_else(|| {
+                        LibraryError::new(
+                            "recovery_missing",
+                            "Save operation has no durable recovery snapshot",
+                        )
+                    })?;
+                    if snapshot.session_generation != session_generation
+                        || snapshot.revision != revision
+                        || snapshot.base_fingerprint != expected
+                        || snapshot.intended_disk_hash != intended_fingerprint
+                    {
+                        return Err(journal_mismatch(
+                            "Save operation does not match its recovery snapshot",
+                        ));
+                    }
+
+                    if self.external_conflict_hash(&document_id)?.is_some() {
+                        cleanup_owned_artifact(&temporary, &intended_fingerprint)?;
+                        cleanup_owned_artifact(&backup, expected)?;
+                        self.remove_operation(&id)?;
+                        continue;
+                    }
+
+                    if phase == JournalPhase::IntentRecorded {
+                        if temporary.exists() {
+                            verify_fingerprint(&temporary, &intended_fingerprint)?;
+                        } else {
+                            write_durable(&temporary, &snapshot.bytes)?;
+                        }
+                        self.update_operation(
+                            &id,
+                            JournalPhase::TemporaryDurable,
+                            None,
+                            file_identity(&temporary)?.as_deref(),
+                        )?;
+                    }
+
+                    let target_fingerprint = if target.exists() {
+                        Some(fingerprint(&target)?)
+                    } else {
+                        None
+                    };
+                    if phase != JournalPhase::FilesystemFinalized {
+                        if target_fingerprint.as_deref() == Some(intended_fingerprint.as_str()) {
+                            verify_fingerprint(&backup, expected)?;
+                            self.update_operation(
+                                &id,
+                                JournalPhase::FilesystemFinalized,
+                                Some(&intended_fingerprint),
+                                file_identity(&target)?.as_deref(),
+                            )?;
+                        } else if target_fingerprint.as_deref() == Some(expected)
+                            && file_identity(&target)? == self.document_identity(&document_id)?
+                        {
+                            if !temporary.exists() {
+                                return Err(journal_mismatch(
+                                    "Durable save temporary disappeared before replacement",
+                                ));
+                            }
+                            let expected_identity = self.document_identity(&document_id)?;
+                            match replace_if_unchanged(
+                                &target,
+                                &temporary,
+                                &backup,
+                                expected,
+                                expected_identity.as_deref(),
+                                &intended_fingerprint,
+                            ) {
+                                Ok(replaced) => self.update_operation(
+                                    &id,
+                                    JournalPhase::FilesystemFinalized,
+                                    Some(&replaced.fingerprint),
+                                    replaced.file_identity.as_deref(),
+                                )?,
+                                Err(error) if error.code() == "external_change" => {
+                                    self.record_external_conflict(
+                                        &id,
+                                        &document_id,
+                                        &snapshot,
+                                        &target,
+                                    )?;
+                                    cleanup_owned_artifact(&temporary, &intended_fingerprint)?;
+                                    cleanup_owned_artifact(&backup, expected)?;
+                                    self.remove_operation(&id)?;
+                                    continue;
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        } else {
+                            self.record_external_conflict(&id, &document_id, &snapshot, &target)?;
+                            cleanup_owned_artifact(&temporary, &intended_fingerprint)?;
+                            cleanup_owned_artifact(&backup, expected)?;
+                            self.remove_operation(&id)?;
+                            continue;
+                        }
+                    }
+
+                    verify_fingerprint(&target, &intended_fingerprint)?;
+                    let target_identity = file_identity(&target)?;
+                    if phase == JournalPhase::FilesystemFinalized {
+                        verify_expected_identity(
+                            &target,
+                            finalized_identity.as_deref(),
+                            "Finalized save target identity does not match the journal",
+                        )?;
+                    }
+                    self.commit_saved_document(
+                        &id,
+                        &document_id,
+                        &session_generation,
+                        revision,
+                        &intended_fingerprint,
+                        target_identity.as_deref(),
+                    )?;
+                    cleanup_owned_artifact(&temporary, &intended_fingerprint)?;
+                    cleanup_owned_artifact(&backup, expected)?;
                 }
                 OperationPayload::MoveDocument {
                     document_id,
@@ -2270,6 +2640,18 @@ impl LibraryService {
             .map_err(LibraryError::database)
     }
 
+    fn external_conflict_hash(&self, document_id: &str) -> Result<Option<String>, LibraryError> {
+        self.require_metadata()?
+            .connection()
+            .query_row(
+                "SELECT external_hash FROM external_conflicts WHERE document_id = ?1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(LibraryError::database)
+    }
+
     fn project_by_id(&self, id: &str) -> Result<ProjectSnapshot, LibraryError> {
         self.snapshot()?
             .projects
@@ -2568,6 +2950,15 @@ fn query_recovery_snapshot(
             },
         )
         .transpose()
+}
+
+fn cleanup_owned_artifact(path: &Path, expected_fingerprint: &str) -> Result<(), LibraryError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    verify_fingerprint(path, expected_fingerprint)?;
+    fs::remove_file(path).map_err(LibraryError::io)?;
+    sync_parent(path)
 }
 
 fn query_binding(database: &Database) -> Result<Option<LibraryBinding>, LibraryError> {

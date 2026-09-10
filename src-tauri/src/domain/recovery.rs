@@ -63,6 +63,21 @@ pub struct RecoverySnapshot {
     pub durable_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveStatus {
+    Saved,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDocumentResult {
+    pub status: SaveStatus,
+    pub revision: i64,
+    pub disk_fingerprint: String,
+}
+
 pub(crate) fn validate_snapshot_request(
     request: &RecoverySnapshotRequest,
 ) -> Result<String, LibraryError> {

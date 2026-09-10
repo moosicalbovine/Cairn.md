@@ -1,5 +1,7 @@
 use cairn_md_lib::domain::library::LibraryService;
-use cairn_md_lib::domain::recovery::{RecoveryLifecycle, RecoverySnapshotRequest};
+use std::fs;
+
+use cairn_md_lib::domain::recovery::{RecoveryLifecycle, RecoverySnapshotRequest, SaveStatus};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -108,4 +110,63 @@ fn another_session_cannot_overwrite_or_discard_pending_recovery() {
         .load_recovery_snapshot(&document_id)
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn save_requires_durable_recovery_then_atomically_advances_disk_and_metadata() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    let draft = request(&document_id, &generation, 1, &base_fingerprint, "# Saved\n");
+    service.store_recovery_snapshot(draft.clone()).unwrap();
+
+    let saved = service.save_document(draft).unwrap();
+
+    assert_eq!(saved.status, SaveStatus::Saved);
+    assert_eq!(saved.revision, 1);
+    assert_eq!(
+        fs::read(root.path().join("Alpha/draft.md")).unwrap(),
+        b"# Saved\n"
+    );
+    assert_eq!(
+        service
+            .read_document(&document_id)
+            .unwrap()
+            .base_fingerprint,
+        saved.disk_fingerprint
+    );
+    assert!(service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .is_none());
+    assert_eq!(service.pending_operation_count().unwrap(), 0);
+}
+
+#[test]
+fn external_change_is_preserved_beside_the_recoverable_draft() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    let draft = request(
+        &document_id,
+        &generation,
+        1,
+        &base_fingerprint,
+        "local draft",
+    );
+    service.store_recovery_snapshot(draft.clone()).unwrap();
+    fs::write(root.path().join("Alpha/draft.md"), "external edit").unwrap();
+
+    let conflict = service.save_document(draft).unwrap();
+
+    assert_eq!(conflict.status, SaveStatus::Conflict);
+    assert_eq!(
+        fs::read_to_string(root.path().join("Alpha/draft.md")).unwrap(),
+        "external edit"
+    );
+    let recovery = service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .expect("draft remains recoverable");
+    assert_eq!(recovery.bytes, b"local draft");
+    assert_eq!(recovery.lifecycle_state, RecoveryLifecycle::Conflict);
+    assert_eq!(service.pending_operation_count().unwrap(), 0);
 }
