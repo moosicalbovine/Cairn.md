@@ -60,6 +60,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .icon-button { display: inline-grid; width: 28px; height: 28px; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; }
 .icon-button:hover, .icon-button:focus-visible { border-color: var(--line); background: var(--window); outline: none; }
 .project-list, .tracked-list { display: grid; gap: 2px; }
+.navigation-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; }
+.row-action { display: grid; width: 26px; height: 26px; place-items: center; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+.row-action:hover, .row-action:focus-visible { color: var(--ink); background: var(--window); outline: 2px solid var(--accent); outline-offset: -2px; }
 .navigation-row, .document-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 7px; border: 0; border-radius: 5px; color: inherit; background: transparent; text-align: left; }
 .navigation-row { min-height: 31px; padding: 5px 7px; font-size: 12px; }
 .navigation-row span:last-child, .document-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -74,6 +77,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .pane-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
 .pane-actions button, .primary-button { min-height: 32px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--window); font-size: 11px; }
 .pane-actions button:first-child, .primary-button { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.document-actions { display: flex; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.document-actions button { min-height: 26px; padding: 2px 7px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 10px; }
+.document-actions button:hover, .document-actions button:focus-visible { color: var(--ink); background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: -2px; }
 .document-list { min-height: 0; overflow: auto; }
 .document-row { min-height: 42px; padding: 7px 10px; border-bottom: 1px solid var(--line); border-radius: 0; font-size: 12px; }
 .document-row:hover, .document-row:focus-visible, .document-row[data-selected="true"] { background: var(--accent-soft); outline: none; }
@@ -135,4 +141,10 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+}
+
+@media (forced-colors: active) {
+  .navigation-row[data-selected="true"], .document-row[data-selected="true"], .mode-switch button[data-selected="true"] {
+    border: 1px solid Highlight;
+  }
 }

@@ -16,15 +16,16 @@ const VisualDocumentEditor = lazy(() =>
 
 type DocumentEditorProps = Readonly<{
   document: DocumentSnapshot;
+  readOnly?: boolean;
 }>;
 
 function nameOf(document: DocumentSnapshot): string {
   return document.relativePath.split("/").at(-1) ?? document.relativePath;
 }
 
-export function DocumentEditor({ document }: DocumentEditorProps) {
+export function DocumentEditor({ document, readOnly = false }: DocumentEditorProps) {
   const [editor, setEditor] = useState<EditorSession | null>(null);
-  const [mode, setMode] = useState<EditorMode>("visual");
+  const [mode, setMode] = useState<EditorMode>(readOnly ? "source" : "visual");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -35,7 +36,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         if (!active) return;
         opened = EditorSession.open(content.bytes);
         setEditor(opened);
-        setMode(opened.mode);
+        setMode(readOnly || opened.session.isReadOnly ? "source" : opened.mode);
       },
       (reason) => {
         if (active) setError(reason instanceof Error ? reason.message : "Document could not be opened.");
@@ -45,10 +46,10 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       active = false;
       opened?.dispose();
     };
-  }, [document.id]);
+  }, [document.id, readOnly]);
 
   function switchMode(next: EditorMode) {
-    if (!editor) return;
+    if (!editor || (readOnly && next === "visual")) return;
     editor.switchMode(next);
     setMode(next);
   }
@@ -58,7 +59,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       <header className="document-header">
         <div><span className="pane-kicker">Document</span><h2>{nameOf(document)}</h2></div>
         <div className="mode-switch" aria-label="Editor mode">
-          <button type="button" data-selected={mode === "visual"} disabled={!editor || editor.session.isReadOnly} onClick={() => switchMode("visual")}>Visual</button>
+          <button type="button" data-selected={mode === "visual"} disabled={!editor || editor.session.isReadOnly || readOnly} onClick={() => switchMode("visual")}>Visual</button>
           <button type="button" data-selected={mode === "source"} disabled={!editor} onClick={() => switchMode("source")}>Source</button>
         </div>
       </header>
@@ -69,7 +70,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           {mode === "visual" ? (
             <VisualDocumentEditor visual={editor.visual} onRequestSource={() => switchMode("source")} />
           ) : (
-            <SourceDocumentEditor session={editor.session} />
+            <SourceDocumentEditor session={editor.session} readOnly={readOnly} />
           )}
         </Suspense>
       )}

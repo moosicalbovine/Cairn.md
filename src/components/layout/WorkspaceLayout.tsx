@@ -2,6 +2,8 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -24,6 +26,21 @@ export function WorkspaceLayout({
   onContentsVisibleChange,
 }: WorkspaceLayoutProps) {
   const [contentsWidth, setContentsWidth] = useState(280);
+  const contentsPane = useRef<HTMLElement>(null);
+  const showContentsButton = useRef<HTMLButtonElement>(null);
+  const wasContentsVisible = useRef(contentsVisible);
+
+  useEffect(() => {
+    if (!contentsVisible) {
+      showContentsButton.current?.focus();
+    } else if (!wasContentsVisible.current) {
+      const selectedDocument = contentsPane.current?.querySelector<HTMLElement>(
+        '[role="option"][aria-selected="true"]',
+      );
+      (selectedDocument ?? contentsPane.current)?.focus();
+    }
+    wasContentsVisible.current = contentsVisible;
+  }, [contentsVisible]);
 
   function beginResize(event: ReactPointerEvent<HTMLDivElement>) {
     const startX = event.clientX;
@@ -56,7 +73,12 @@ export function WorkspaceLayout({
       </aside>
       {contentsVisible && (
         <>
-          <aside className="contents-pane" aria-label="Project contents">
+          <aside
+            className="contents-pane"
+            aria-label="Project contents"
+            ref={contentsPane}
+            tabIndex={-1}
+          >
             {contents}
           </aside>
           <div
@@ -91,6 +113,7 @@ export function WorkspaceLayout({
           <button
             className="show-contents-button"
             type="button"
+            ref={showContentsButton}
             onClick={() => onContentsVisibleChange(true)}
           >
             Show contents

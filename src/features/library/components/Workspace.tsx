@@ -1,10 +1,14 @@
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { WorkspaceLayout } from "../../../components/layout/WorkspaceLayout";
 import {
   createDocument,
   createProject,
+  deleteDocument,
   loadLibraryIndex,
+  moveDocument,
+  renameDocument,
+  renameProject,
   type DocumentSnapshot,
   type LibrarySnapshot,
   type ProjectSnapshot,
@@ -13,11 +17,16 @@ import type { TrackedFolderSnapshot } from "../../../lib/tauri/import";
 import { AppearanceSelect } from "../../settings/appearance/AppearanceSelect";
 import type { Appearance } from "../../settings/appearance/appearance";
 import { ImportQueue } from "../import/ImportQueue";
-import { importChosenMarkdownFiles } from "../import/importAdapters";
+import {
+  importChosenMarkdownFiles,
+  importDroppedFiles,
+  listenForDroppedFiles,
+} from "../import/importAdapters";
 import {
   addChosenTrackedFolder,
   importTrackedFile,
   loadTrackedFolders,
+  stopTrackingFolder,
 } from "../tracked-folders/trackedFolderBrowser";
 import { ContentsPane } from "./ContentsPane";
 import { LibraryPane } from "./LibraryPane";
@@ -60,6 +69,61 @@ export function Workspace({
     snapshot.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedDocument =
     selectedProject?.documents.find((document) => document.id === selectedDocumentId) ?? null;
+  const canMutate = snapshot.mode === "writable";
+
+  useEffect(() => {
+    let active = true;
+    let stopListening: (() => void) | undefined;
+
+    void listenForDroppedFiles((paths) => {
+      if (!active) return;
+      if (!selectedProjectId) {
+        setNotice("Choose a destination project before dropping Markdown files.");
+        return;
+      }
+      if (!canMutate) {
+        setNotice("This library is read-only, so files cannot be imported.");
+        return;
+      }
+
+      setNotice(null);
+      void (async () => {
+        try {
+          const imported = await importDroppedFiles(
+            selectedProjectId,
+            paths,
+            importQueue.current,
+          );
+          if (!active) return;
+          await loadLibraryIndex((nextSnapshot) => {
+            if (active) setSnapshot(nextSnapshot);
+          });
+          if (!active) return;
+          const latest = imported.at(-1);
+          if (latest) setSelectedDocumentId(latest.document.id);
+        } catch (reason) {
+          if (active) {
+            setNotice(reason instanceof Error ? reason.message : "Dropped files could not be imported.");
+          }
+        }
+      })();
+    }).then(
+      (stop) => {
+        if (active) stopListening = stop;
+        else stop();
+      },
+      (reason) => {
+        if (active) {
+          setNotice(reason instanceof Error ? reason.message : "File drop is unavailable.");
+        }
+      },
+    );
+
+    return () => {
+      active = false;
+      stopListening?.();
+    };
+  }, [canMutate, selectedProjectId]);
 
   async function refresh(preferredDocumentId?: string) {
     const next = await loadLibraryIndex(setSnapshot);
@@ -105,6 +169,7 @@ export function Workspace({
             projects={snapshot.projects}
             selectedProjectId={selectedProjectId}
             trackedFolders={trackedFolders}
+            canMutate={canMutate}
             onSelectProject={selectProject}
             onCreateProject={() => void run(async () => {
               const name = askForName("Project name", "New project");
@@ -114,9 +179,20 @@ export function Workspace({
               setSelectedProjectId(project.id);
               setSelectedDocumentId(null);
             })}
+            onRenameProject={(project) => void run(async () => {
+              const name = askForName("Project name", project.relativePath);
+              if (!name || name === project.relativePath) return;
+              await renameProject(project.id, name);
+              await refresh();
+            })}
             onAddTrackedFolder={() => void run(async () => {
               const folder = await addChosenTrackedFolder();
               if (folder) setTrackedFolders(await loadTrackedFolders());
+            })}
+            onRemoveTrackedFolder={(folder) => void run(async () => {
+              if (!globalThis.confirm(`Stop tracking “${folder.displayName}”? The original files will not be changed.`)) return;
+              await stopTrackingFolder(folder.id);
+              setTrackedFolders(await loadTrackedFolders());
             })}
             onImportTracked={(folderId, entry) => void run(async () => {
               if (!selectedProject) throw new Error("Choose a destination project first.");
@@ -129,6 +205,7 @@ export function Workspace({
           <ContentsPane
             project={selectedProject}
             selectedDocumentId={selectedDocumentId}
+            canMutate={canMutate}
             onSelectDocument={selectDocument}
             onCollapse={() => setContentsVisible(false)}
             onImportFiles={() => void run(async () => {
@@ -144,12 +221,44 @@ export function Workspace({
               const document = await createDocument(selectedProject.id, name);
               await refresh(document.id);
             })}
+            onRenameDocument={(document) => void run(async () => {
+              const currentName = document.relativePath.split("/").at(-1) ?? document.relativePath;
+              const name = askForName("Document name", currentName);
+              if (!name || name === currentName) return;
+              await renameDocument(document.id, name);
+              await refresh(document.id);
+            })}
+            onMoveDocument={(document) => void run(async () => {
+              const destinations = snapshot.projects.filter((project) => project.id !== selectedProjectId);
+              const suggested = destinations[0];
+              if (!suggested) throw new Error("Create another project before moving this document.");
+              const name = askForName("Move to project", suggested.relativePath);
+              if (!name) return;
+              const destination = destinations.find(
+                (project) => project.relativePath.toLocaleLowerCase() === name.toLocaleLowerCase(),
+              );
+              if (!destination) throw new Error(`No project named “${name}” was found.`);
+              await moveDocument(document.id, destination.id);
+              setSelectedProjectId(destination.id);
+              await refresh(document.id);
+            })}
+            onDeleteDocument={(document) => void run(async () => {
+              const name = document.relativePath.split("/").at(-1) ?? document.relativePath;
+              if (!globalThis.confirm(`Delete “${name}”? Cairn.md will use the Recycle Bin when available.`)) return;
+              await deleteDocument(document.id);
+              setSelectedDocumentId(null);
+              await refresh();
+            })}
           />
         }
         editor={
           selectedDocument ? (
             <Suspense fallback={<div className="editor-message">Loading editor…</div>}>
-              <DocumentEditor key={selectedDocument.id} document={selectedDocument} />
+              <DocumentEditor
+                key={selectedDocument.id}
+                document={selectedDocument}
+                readOnly={!canMutate}
+              />
             </Suspense>
           ) : (
             <div className="editor-empty">

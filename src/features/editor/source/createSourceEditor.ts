@@ -12,6 +12,7 @@ export interface SourceEditorHandle {
 export function createSourceEditor(
   parent: HTMLElement,
   session: MarkdownSession,
+  readOnly = false,
 ): SourceEditorHandle {
   let applyingSessionChange = false;
 
@@ -24,7 +25,7 @@ export function createSourceEditor(
       EditorState.lineSeparator.of(
         session.lineEnding === "crlf" ? "\r\n" : "\n",
       ),
-      EditorView.editable.of(!session.isReadOnly),
+      EditorView.editable.of(!session.isReadOnly && !readOnly),
       EditorView.updateListener.of((update) => {
         if (!update.docChanged || applyingSessionChange) {
           return;
