@@ -25,6 +25,16 @@ npm run tauri build
 
 The Tauri build produces an x64 current-user NSIS installer beneath `src-tauri/target/release/bundle/nsis`. It embeds the small Evergreen WebView2 bootstrapper, blocks downgrades, and does not include an auto-updater.
 
+Smoke-test that installer on a disposable Windows account or CI runner:
+
+```powershell
+$installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+$version = (Get-Content "src-tauri\tauri.conf.json" | ConvertFrom-Json).version
+npm run release:validate -- -InstallerPath $installer.FullName -ExpectedVersion $version
+```
+
+The script installs for the current user, launches the installed editor with isolated app data, waits for the real editor-ready signal, uninstalls silently, and confirms a user-library sentinel remains. It does not replace the clean-sandbox WebView2-present and WebView2-absent checklist below.
+
 CI retains unsigned installer artifacts for 14 days. Signing is conditional on a maintainer-provided certificate and timestamp service; secrets must never be committed. A public release must clearly say whether its installer is signed.
 
 ## Performance evidence
