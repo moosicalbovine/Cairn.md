@@ -15,9 +15,9 @@ use crate::domain::project::{
 };
 use crate::infrastructure::database::{Database, DatabaseOpen};
 use crate::infrastructure::filesystem::{
-    case_aware_rename, file_identity, fingerprint, probe_candidate, recycle_file,
-    rename_no_replace, resolve_existing, resolve_new, scan, sync_parent, write_durable,
-    CandidateRootProbe, ScannedProject,
+    case_aware_rename, copy_durable_no_replace, file_identity, fingerprint, probe_candidate,
+    recycle_file, rename_no_replace, resolve_existing, resolve_new, scan, sync_parent,
+    write_durable, CandidateRootProbe, ScannedProject,
 };
 use crate::infrastructure::watcher::{LibraryWatcher, WatcherHints};
 
@@ -198,6 +198,8 @@ enum OperationPayload {
     DeleteDocument {
         document_id: String,
         relative_path: String,
+        #[serde(default)]
+        recovery_relative_path: Option<String>,
     },
 }
 
@@ -232,22 +234,35 @@ impl LibraryService {
         };
 
         if service.database.is_some() {
-            if let Err(error) = service.replay_pending_operations() {
-                log::error!("Cairn.md journal replay failed: {error}");
-                service.enter_read_only("journal_recovery_failed");
-                service.preserve_metadata_evidence();
-                return Ok(service);
-            }
             match service.binding() {
-                Ok(Some(binding)) => match probe_candidate(&binding.root_path) {
-                    Ok(probe) if probe.can_bind => {
-                        if let Err(error) = service.restart_watcher(&binding.root_path) {
-                            log::error!("Cairn.md watcher startup failed: {error}");
-                            service.enter_read_only("watcher_unavailable");
-                            service.preserve_metadata_evidence();
+                Ok(Some(binding)) => match file_identity(&binding.root_path) {
+                    Ok(Some(identity)) if identity == binding.root_identity => {
+                        match probe_candidate(&binding.root_path) {
+                            Ok(probe)
+                                if probe.can_bind
+                                    && probe.root_identity.as_deref()
+                                        == Some(binding.root_identity.as_str()) =>
+                            {
+                                if let Err(error) = service.replay_pending_operations() {
+                                    log::error!("Cairn.md journal replay failed: {error}");
+                                    service.enter_read_only("journal_recovery_failed");
+                                    service.preserve_metadata_evidence();
+                                    return Ok(service);
+                                }
+                                if let Err(error) = service.restart_watcher(&binding.root_path) {
+                                    log::error!("Cairn.md watcher startup failed: {error}");
+                                    service.enter_read_only("watcher_unavailable");
+                                    service.preserve_metadata_evidence();
+                                }
+                            }
+                            Ok(probe) if probe.can_bind => {
+                                service.enter_read_only("root_identity_mismatch")
+                            }
+                            Ok(_) | Err(_) => service.enter_read_only("root_capability_lost"),
                         }
                     }
-                    Ok(_) | Err(_) => service.enter_read_only("root_capability_lost"),
+                    Ok(_) => service.enter_read_only("root_identity_mismatch"),
+                    Err(_) => service.enter_read_only("root_capability_lost"),
                 },
                 Ok(None) => {}
                 Err(error) => {
@@ -703,19 +718,30 @@ impl LibraryService {
         let source = resolve_existing(&binding.root_path, &document.relative_path)?;
         let operation_id = Uuid::new_v4().to_string();
         let expected = fingerprint(&source)?;
+        let project_path = document
+            .relative_path
+            .split('/')
+            .next()
+            .ok_or_else(|| LibraryError::invalid_path("Document path is invalid"))?;
+        let recovery_relative_path =
+            document_relative_path(project_path, &format!(".cairn-recovery-{operation_id}.md"));
+        let recovery_path = resolve_new(&binding.root_path, &recovery_relative_path)?;
         let payload = OperationPayload::DeleteDocument {
             document_id: document_id.to_owned(),
             relative_path: document.relative_path.clone(),
+            recovery_relative_path: Some(recovery_relative_path.clone()),
         };
         self.insert_operation(
             &operation_id,
             &binding.library_id,
             "delete_document",
             &payload,
-            None,
+            Some(&recovery_relative_path),
             Some(&expected),
         )?;
-        let recovery_path = recycle_file(&source)?;
+        ensure_recovery_copy(&source, &recovery_path, &expected)?;
+        self.update_operation(&operation_id, JournalPhase::TemporaryDurable, None)?;
+        recycle_file(&source)?;
         self.update_operation(&operation_id, JournalPhase::FilesystemFinalized, None)?;
         self.database_mut()?
             .connection_mut()
@@ -724,7 +750,7 @@ impl LibraryService {
         self.update_operation(&operation_id, JournalPhase::MetadataCommitted, None)?;
         self.finish_operation(&operation_id)?;
         Ok(DeletedDocument {
-            recovery_path,
+            recovery_path: Some(recovery_path),
             recycled: true,
         })
     }
@@ -861,7 +887,15 @@ impl LibraryService {
             rows
         };
         for (id, phase_text, payload_json, temporary_path, expected_fingerprint) in operations {
-            let _phase = JournalPhase::parse(&phase_text)?;
+            let phase = JournalPhase::parse(&phase_text)?;
+            if phase == JournalPhase::CleanupComplete {
+                self.remove_operation(&id)?;
+                continue;
+            }
+            if phase == JournalPhase::MetadataCommitted {
+                self.finish_operation(&id)?;
+                continue;
+            }
             let payload: OperationPayload = serde_json::from_str(&payload_json)
                 .map_err(|error| LibraryError::new("journal_invalid", error.to_string()))?;
             match payload {
@@ -871,12 +905,18 @@ impl LibraryService {
                 } => {
                     validate_relative_path(&relative_path, 1)?;
                     let target = resolve_new(&binding.root_path, &relative_path)?;
+                    if phase == JournalPhase::FilesystemFinalized && !target.exists() {
+                        return Err(journal_mismatch("Finalized project target is missing"));
+                    }
                     if !target.exists() {
                         fs::create_dir(&target).map_err(map_conflict_io)?;
                         sync_parent(&target)?;
                     }
                     if !target.is_dir() {
                         return Err(journal_mismatch("Project target is not a directory"));
+                    }
+                    if phase != JournalPhase::FilesystemFinalized {
+                        self.update_operation(&id, JournalPhase::FilesystemFinalized, None)?;
                     }
                     self.database_mut()?.connection_mut().execute(
                         "INSERT OR IGNORE INTO projects (id, library_id, relative_path, path_key, file_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
@@ -890,13 +930,22 @@ impl LibraryService {
                 } => {
                     validate_relative_path(&from_relative_path, 1)?;
                     validate_relative_path(&to_relative_path, 1)?;
-                    replay_move(
-                        &binding.root_path,
-                        &from_relative_path,
-                        &to_relative_path,
-                        &id,
-                        None,
-                    )?;
+                    if phase == JournalPhase::FilesystemFinalized {
+                        let target = resolve_existing(&binding.root_path, &to_relative_path)
+                            .map_err(|_| journal_mismatch("Finalized project target is missing"))?;
+                        if !target.is_dir() {
+                            return Err(journal_mismatch("Project target is not a directory"));
+                        }
+                    } else {
+                        replay_move(
+                            &binding.root_path,
+                            &from_relative_path,
+                            &to_relative_path,
+                            &id,
+                            None,
+                        )?;
+                        self.update_operation(&id, JournalPhase::FilesystemFinalized, None)?;
+                    }
                     let target = resolve_existing(&binding.root_path, &to_relative_path)?;
                     update_project_metadata(
                         self.database_mut()?.connection_mut(),
@@ -923,19 +972,38 @@ impl LibraryService {
                     let expected = expected_fingerprint.as_deref().ok_or_else(|| {
                         LibraryError::new("journal_invalid", "Create operation has no fingerprint")
                     })?;
-                    match (temporary.exists(), target.exists()) {
-                        (false, false) => write_durable(&temporary, b"")?,
-                        (true, false) => verify_fingerprint(&temporary, expected)?,
-                        (false, true) => {}
-                        (true, true) => {
-                            return Err(journal_mismatch(
-                                "Both temporary and final documents exist",
-                            ));
+                    if phase == JournalPhase::FilesystemFinalized {
+                        if !target.exists() {
+                            return Err(journal_mismatch("Finalized document target is missing"));
                         }
-                    }
-                    if !target.exists() {
-                        rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
-                        sync_parent(&target)?;
+                    } else {
+                        match (temporary.exists(), target.exists()) {
+                            (false, false) => write_durable(&temporary, b"")?,
+                            (true, false) => verify_fingerprint(&temporary, expected)?,
+                            (false, true) => {}
+                            (true, true) => {
+                                let temporary_identity = file_identity(&temporary)?;
+                                if temporary_identity.is_some()
+                                    && temporary_identity == file_identity(&target)?
+                                    && fingerprint(&temporary)? == fingerprint(&target)?
+                                {
+                                    fs::remove_file(&temporary).map_err(LibraryError::io)?;
+                                } else {
+                                    return Err(journal_mismatch(
+                                        "Temporary and final documents do not match",
+                                    ));
+                                }
+                            }
+                        }
+                        if !target.exists() {
+                            rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
+                            sync_parent(&target)?;
+                        }
+                        self.update_operation(
+                            &id,
+                            JournalPhase::FilesystemFinalized,
+                            Some(expected),
+                        )?;
                     }
                     verify_fingerprint(&target, expected)?;
                     self.insert_document_metadata(
@@ -958,13 +1026,24 @@ impl LibraryService {
                     let expected = expected_fingerprint.as_deref().ok_or_else(|| {
                         LibraryError::new("journal_invalid", "Move operation has no fingerprint")
                     })?;
-                    replay_move(
-                        &binding.root_path,
-                        &from_relative_path,
-                        &to_relative_path,
-                        &id,
-                        Some(expected),
-                    )?;
+                    if phase == JournalPhase::FilesystemFinalized {
+                        let target = resolve_existing(&binding.root_path, &to_relative_path)
+                            .map_err(|_| journal_mismatch("Finalized move target is missing"))?;
+                        verify_fingerprint(&target, expected)?;
+                    } else {
+                        replay_move(
+                            &binding.root_path,
+                            &from_relative_path,
+                            &to_relative_path,
+                            &id,
+                            Some(expected),
+                        )?;
+                        self.update_operation(
+                            &id,
+                            JournalPhase::FilesystemFinalized,
+                            Some(expected),
+                        )?;
+                    }
                     let target = resolve_existing(&binding.root_path, &to_relative_path)?;
                     self.database_mut()?.connection_mut().execute(
                         "UPDATE documents SET project_id = ?1, relative_path = ?2, path_key = ?3, file_identity = ?4, disk_fingerprint = ?5, updated_at = ?6 WHERE id = ?7",
@@ -974,18 +1053,39 @@ impl LibraryService {
                 OperationPayload::DeleteDocument {
                     document_id,
                     relative_path,
+                    recovery_relative_path,
                 } => {
                     validate_relative_path(&relative_path, 2)?;
-                    let source = resolve_new(&binding.root_path, &relative_path)?;
-                    if source.exists() {
-                        let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                    let recovery_relative_path =
+                        recovery_relative_path.or(temporary_path).ok_or_else(|| {
                             LibraryError::new(
                                 "journal_invalid",
-                                "Delete operation has no fingerprint",
+                                "Delete operation has no recovery path",
                             )
                         })?;
-                        verify_fingerprint(&source, expected)?;
-                        recycle_file(&source)?;
+                    validate_relative_path(&recovery_relative_path, 2)?;
+                    let source = resolve_new(&binding.root_path, &relative_path)?;
+                    let recovery = resolve_new(&binding.root_path, &recovery_relative_path)?;
+                    let expected = expected_fingerprint.as_deref().ok_or_else(|| {
+                        LibraryError::new("journal_invalid", "Delete operation has no fingerprint")
+                    })?;
+                    if phase == JournalPhase::IntentRecorded {
+                        if !source.exists() {
+                            return Err(journal_mismatch(
+                                "Delete source disappeared before recovery was durable",
+                            ));
+                        }
+                        ensure_recovery_copy(&source, &recovery, expected)?;
+                        self.update_operation(&id, JournalPhase::TemporaryDurable, None)?;
+                    } else {
+                        verify_fingerprint(&recovery, expected)?;
+                    }
+                    if phase != JournalPhase::FilesystemFinalized {
+                        if source.exists() {
+                            verify_fingerprint(&source, expected)?;
+                            recycle_file(&source)?;
+                        }
+                        self.update_operation(&id, JournalPhase::FilesystemFinalized, None)?;
                     }
                     self.database_mut()?
                         .connection_mut()
@@ -993,6 +1093,7 @@ impl LibraryService {
                         .map_err(LibraryError::database)?;
                 }
             }
+            self.update_operation(&id, JournalPhase::MetadataCommitted, None)?;
             self.finish_operation(&id)?;
         }
         Ok(())
@@ -1069,6 +1170,10 @@ impl LibraryService {
                 params![JournalPhase::CleanupComplete.as_str(), now_millis(), id],
             )
             .map_err(LibraryError::database)?;
+        self.remove_operation(id)
+    }
+
+    fn remove_operation(&mut self, id: &str) -> Result<(), LibraryError> {
         self.database_mut()?
             .connection_mut()
             .execute("DELETE FROM pending_file_operations WHERE id = ?1", [id])
@@ -1460,13 +1565,35 @@ fn replay_move(
     let source = resolve_new(root, from_relative_path)?;
     let target = resolve_new(root, to_relative_path)?;
     if path_key(from_relative_path) == path_key(to_relative_path) {
-        if !source.exists() {
+        let temporary = source.with_file_name(format!(".cairn-case-{operation_id}.tmp"));
+        if temporary.exists() {
+            if source.exists() {
+                if !same_filesystem_object(&source, &temporary)? {
+                    return Err(journal_mismatch(
+                        "Case-rename source conflicts with its temporary file",
+                    ));
+                }
+                fs::remove_file(&source).map_err(LibraryError::io)?;
+            }
+            if target.exists() {
+                if !same_filesystem_object(&target, &temporary)? {
+                    return Err(journal_mismatch(
+                        "Case-rename target conflicts with its temporary file",
+                    ));
+                }
+                fs::remove_file(&temporary).map_err(LibraryError::io)?;
+            } else {
+                rename_no_replace(&temporary, &target).map_err(map_conflict_io)?;
+                sync_parent(&target)?;
+            }
+        } else if source.exists() {
+            if let Some(expected) = expected_fingerprint {
+                verify_fingerprint(&source, expected)?;
+            }
+            case_aware_rename(&source, &target, operation_id).map_err(map_conflict_io)?;
+        } else if !target.exists() {
             return Err(journal_mismatch("Case-only rename target is missing"));
         }
-        if let Some(expected) = expected_fingerprint {
-            verify_fingerprint(&source, expected)?;
-        }
-        case_aware_rename(&source, &target, operation_id).map_err(map_conflict_io)?;
     } else {
         match (source.exists(), target.exists()) {
             (true, false) => {
@@ -1477,6 +1604,13 @@ fn replay_move(
                 sync_parent(&target)?;
             }
             (false, true) => {}
+            (true, true) if same_filesystem_object(&source, &target)? => {
+                if let Some(expected) = expected_fingerprint {
+                    verify_fingerprint(&source, expected)?;
+                    verify_fingerprint(&target, expected)?;
+                }
+                fs::remove_file(&source).map_err(LibraryError::io)?;
+            }
             (true, true) => return Err(journal_mismatch("Move source and target both exist")),
             (false, false) => return Err(journal_mismatch("Move source and target are missing")),
         }
@@ -1485,6 +1619,25 @@ fn replay_move(
         verify_fingerprint(&target, expected)?;
     }
     Ok(())
+}
+
+fn same_filesystem_object(left: &Path, right: &Path) -> Result<bool, LibraryError> {
+    let left_identity = file_identity(left)?;
+    Ok(left_identity.is_some() && left_identity == file_identity(right)?)
+}
+
+fn ensure_recovery_copy(
+    source: &Path,
+    recovery: &Path,
+    expected_fingerprint: &str,
+) -> Result<(), LibraryError> {
+    verify_fingerprint(source, expected_fingerprint)?;
+    if recovery.exists() {
+        return verify_fingerprint(recovery, expected_fingerprint);
+    }
+    copy_durable_no_replace(source, recovery)?;
+    sync_parent(recovery)?;
+    verify_fingerprint(recovery, expected_fingerprint)
 }
 
 fn verify_fingerprint(path: &Path, expected: &str) -> Result<(), LibraryError> {

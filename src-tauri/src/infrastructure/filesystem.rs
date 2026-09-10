@@ -60,6 +60,7 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
     let source = canonical.join(format!(".cairn-probe-{token}.tmp"));
     let target = canonical.join(format!(".cairn-probe-{token}.moved"));
     let collision = canonical.join(format!(".cairn-probe-{token}.collision"));
+    let recovery = canonical.join(format!(".cairn-probe-{token}.recovery"));
     let mut can_create = false;
     let mut can_flush = false;
     let mut can_rename = false;
@@ -94,17 +95,17 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
             can_rename = true;
         }
         fs::rename(&target, &source).map_err(LibraryError::io)?;
-        let recycled = recycle_file(&source)?;
-        can_recover = !source.exists();
-        if let Some(path) = recycled {
-            let _ = fs::remove_file(path);
-        }
+        let expected = fingerprint(&source)?;
+        copy_durable_no_replace(&source, &recovery)?;
+        recycle_file(&source)?;
+        can_recover = !source.exists() && recovery.is_file() && fingerprint(&recovery)? == expected;
         Ok(())
     })();
 
     let _ = fs::remove_file(&source);
     let _ = fs::remove_file(&target);
     let _ = fs::remove_file(&collision);
+    let _ = fs::remove_file(&recovery);
 
     let reason = result
         .err()
@@ -231,12 +232,19 @@ pub fn rename_no_replace(source: &Path, target: &Path) -> std::io::Result<()> {
         ));
     }
     if source.is_file() {
-        fs::hard_link(source, target)?;
-        if let Err(error) = fs::remove_file(source) {
-            let _ = fs::remove_file(target);
-            return Err(error);
+        #[cfg(windows)]
+        {
+            fs::rename(source, target)
         }
-        Ok(())
+        #[cfg(not(windows))]
+        {
+            fs::hard_link(source, target)?;
+            if let Err(error) = fs::remove_file(source) {
+                let _ = fs::remove_file(target);
+                return Err(error);
+            }
+            Ok(())
+        }
     } else {
         fs::rename(source, target)
     }
@@ -270,6 +278,26 @@ pub fn write_durable(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
     file.sync_all().map_err(LibraryError::io)
 }
 
+pub fn copy_durable_no_replace(source: &Path, target: &Path) -> Result<(), LibraryError> {
+    let mut input = File::open(source).map_err(LibraryError::io)?;
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(target)
+        .map_err(LibraryError::io)?;
+    if let Err(error) = std::io::copy(&mut input, &mut output) {
+        drop(output);
+        let _ = fs::remove_file(target);
+        return Err(LibraryError::io(error));
+    }
+    if let Err(error) = output.sync_all() {
+        drop(output);
+        let _ = fs::remove_file(target);
+        return Err(LibraryError::io(error));
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
     use std::os::windows::ffi::OsStrExt;
@@ -279,6 +307,15 @@ pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
     };
 
     let mut from = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    const EXTENDED_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC_PREFIX: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+    if from.starts_with(EXTENDED_PREFIX) {
+        from.drain(..EXTENDED_PREFIX.len());
+        if from.starts_with(UNC_PREFIX) {
+            from.drain(..UNC_PREFIX.len());
+            from.splice(0..0, [b'\\' as u16, b'\\' as u16]);
+        }
+    }
     from.push(0);
     from.push(0);
     let mut operation = SHFILEOPSTRUCTW {
@@ -299,9 +336,8 @@ pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
 
 #[cfg(not(windows))]
 pub fn recycle_file(path: &Path) -> Result<Option<PathBuf>, LibraryError> {
-    let recovery = path.with_file_name(format!(".cairn-test-trash-{}", Uuid::new_v4()));
-    fs::rename(path, &recovery).map_err(LibraryError::io)?;
-    Ok(Some(recovery))
+    fs::remove_file(path).map_err(LibraryError::io)?;
+    Ok(None)
 }
 
 pub fn fingerprint(path: &Path) -> Result<String, LibraryError> {

@@ -51,6 +51,7 @@ export type RelinkPreview = Readonly<{
   rootIdentity: string;
   matchedProjects: number;
   matchedDocuments: number;
+  candidateManifest: string;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,11 +139,43 @@ export function parseLibrarySnapshot(value: unknown): LibrarySnapshot {
   };
 }
 
+export function parseRelinkPreview(value: unknown): RelinkPreview {
+  if (
+    !isRecord(value) ||
+    typeof value.candidatePath !== "string" ||
+    typeof value.libraryId !== "string" ||
+    !Number.isSafeInteger(value.expectedGeneration) ||
+    (value.expectedGeneration as number) < 1 ||
+    typeof value.expectedStateToken !== "string" ||
+    typeof value.rootIdentity !== "string" ||
+    !Number.isSafeInteger(value.matchedProjects) ||
+    (value.matchedProjects as number) < 0 ||
+    !Number.isSafeInteger(value.matchedDocuments) ||
+    (value.matchedDocuments as number) < 0 ||
+    typeof value.candidateManifest !== "string"
+  ) {
+    throw new Error("Invalid relink preview");
+  }
+  return {
+    candidatePath: value.candidatePath,
+    libraryId: value.libraryId,
+    expectedGeneration: value.expectedGeneration as number,
+    expectedStateToken: value.expectedStateToken,
+    rootIdentity: value.rootIdentity,
+    matchedProjects: value.matchedProjects as number,
+    matchedDocuments: value.matchedDocuments as number,
+    candidateManifest: value.candidateManifest,
+  };
+}
+
 export async function loadLibraryIndex(
   renderSnapshot: (snapshot: LibrarySnapshot) => void,
 ): Promise<LibrarySnapshot> {
   const cached = parseLibrarySnapshot(await invoke<unknown>("library_snapshot"));
   renderSnapshot(cached);
+  if (cached.binding === null || cached.mode === "readOnly") {
+    return cached;
+  }
   const reconciled = parseLibrarySnapshot(await invoke<unknown>("reconcile_library"));
   renderSnapshot(reconciled);
   return reconciled;
@@ -193,7 +226,9 @@ export async function bindLibraryRoot(rootPath: string): Promise<LibrarySnapshot
 }
 
 export async function previewLibraryRelink(candidatePath: string): Promise<RelinkPreview> {
-  return invoke<RelinkPreview>("preview_library_relink", { candidatePath });
+  return parseRelinkPreview(
+    await invoke<unknown>("preview_library_relink", { candidatePath }),
+  );
 }
 
 export async function confirmLibraryRelink(preview: RelinkPreview): Promise<LibrarySnapshot> {

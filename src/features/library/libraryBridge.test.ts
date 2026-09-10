@@ -2,11 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  confirmLibraryRelink,
   createProject,
   loadLibraryIndex,
   parseLibrarySnapshot,
+  previewLibraryRelink,
   watchLibraryReconciliation,
   type LibrarySnapshot,
+  type RelinkPreview,
 } from "../../lib/tauri/library";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -42,6 +45,75 @@ describe("library command bridge", () => {
       "library_snapshot",
       "reconcile_library",
     ]);
+  });
+
+  it("renders and returns an unbound cached index without reconciling", async () => {
+    const unbound = { ...snapshot, binding: null };
+    vi.mocked(invoke).mockResolvedValue(unbound);
+    const rendered: LibrarySnapshot[] = [];
+
+    await expect(loadLibraryIndex((value) => rendered.push(value))).resolves.toEqual(unbound);
+
+    expect(rendered).toEqual([unbound]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("library_snapshot");
+  });
+
+  it("renders and returns a read-only cached index without reconciling", async () => {
+    const readOnly = {
+      ...snapshot,
+      mode: "readOnly" as const,
+      readOnlyReason: "Library root is unavailable",
+    };
+    vi.mocked(invoke).mockResolvedValue(readOnly);
+    const rendered: LibrarySnapshot[] = [];
+
+    await expect(loadLibraryIndex((value) => rendered.push(value))).resolves.toEqual(readOnly);
+
+    expect(rendered).toEqual([readOnly]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("library_snapshot");
+  });
+
+  it("preserves candidateManifest across the relink preview contract", async () => {
+    const preview: RelinkPreview = {
+      candidatePath: "D:\\Library",
+      libraryId: "library-1",
+      expectedGeneration: 1,
+      expectedStateToken: "state-token",
+      rootIdentity: "root-2",
+      matchedProjects: 2,
+      matchedDocuments: 3,
+      candidateManifest: '{"projects":[]}',
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce(snapshot);
+
+    const parsed = await previewLibraryRelink(preview.candidatePath);
+    await expect(confirmLibraryRelink(parsed)).resolves.toEqual(snapshot);
+
+    expect(parsed).toEqual(preview);
+    expect(invoke).toHaveBeenNthCalledWith(1, "preview_library_relink", {
+      candidatePath: preview.candidatePath,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "confirm_library_relink", { preview });
+  });
+
+  it("rejects a relink preview without candidateManifest", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      candidatePath: "D:\\Library",
+      libraryId: "library-1",
+      expectedGeneration: 1,
+      expectedStateToken: "state-token",
+      rootIdentity: "root-2",
+      matchedProjects: 2,
+      matchedDocuments: 3,
+    });
+
+    await expect(previewLibraryRelink("D:\\Library")).rejects.toThrow(
+      "Invalid relink preview",
+    );
   });
 
   it("passes only a project name across the create-project boundary", async () => {

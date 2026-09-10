@@ -71,9 +71,6 @@ fn project_and_document_lifecycle_preserves_stable_ids() {
 
     let deleted = service.delete_document(&document.id).unwrap();
     assert!(deleted.recycled);
-    #[cfg(windows)]
-    assert!(deleted.recovery_path.is_none());
-    #[cfg(not(windows))]
     assert!(deleted
         .recovery_path
         .as_ref()
@@ -396,6 +393,75 @@ fn replay_mismatch_opens_read_only_and_preserves_pending_evidence() {
         Some("journal_recovery_failed")
     );
     assert_eq!(restarted.pending_operation_count().unwrap(), 1);
+}
+
+#[test]
+fn startup_rejects_an_unrelated_directory_at_the_bound_path_before_mutating_it() {
+    let app_data = TempDir::new().unwrap();
+    let container = TempDir::new().unwrap();
+    let bound = container.path().join("bound");
+    let relocated = container.path().join("relocated");
+    fs::create_dir(&bound).unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    service.bind_root(&bound).unwrap();
+    service.create_project("Original").unwrap();
+    drop(service);
+
+    fs::rename(&bound, &relocated).unwrap();
+    fs::create_dir(&bound).unwrap();
+    fs::write(bound.join("unrelated.txt"), "leave me alone").unwrap();
+
+    let restarted = LibraryService::open(app_data.path()).unwrap();
+    let snapshot = restarted.snapshot().unwrap();
+    assert_eq!(snapshot.mode, LibraryMode::ReadOnly);
+    assert_eq!(
+        snapshot.read_only_reason.as_deref(),
+        Some("root_identity_mismatch")
+    );
+    let entries = fs::read_dir(&bound)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, vec!["unrelated.txt".to_owned()]);
+}
+
+#[test]
+fn cleanup_complete_replay_never_repeats_a_delete() {
+    let app_data = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let mut service = LibraryService::open(app_data.path()).unwrap();
+    let bound = service.bind_root(root.path()).unwrap();
+    let library_id = bound.binding.unwrap().library_id;
+    let project = service.create_project("Alpha").unwrap();
+    let document = service.create_document(&project.id, "note.md").unwrap();
+    fs::write(root.path().join("Alpha/note.md"), "restored content").unwrap();
+    service.reconcile().unwrap();
+    service.delete_document(&document.id).unwrap();
+    fs::write(root.path().join("Alpha/note.md"), "restored content").unwrap();
+    drop(service);
+
+    let database_path = app_data.path().join("library.sqlite3");
+    let connection = rusqlite::Connection::open(database_path).unwrap();
+    let payload = serde_json::json!({
+        "kind": "delete_document",
+        "document_id": document.id,
+        "relative_path": "Alpha/note.md",
+        "recovery_relative_path": "Alpha/.cairn-recovery-finished.md"
+    });
+    connection
+        .execute(
+            "INSERT INTO pending_file_operations (id, library_id, kind, phase, payload_json, expected_fingerprint, finalized_fingerprint, temporary_path, created_at, updated_at) VALUES ('finished-delete', ?1, 'delete_document', 'Cleanup complete', ?2, NULL, NULL, NULL, 1, 1)",
+            rusqlite::params![library_id, payload.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let restarted = LibraryService::open(app_data.path()).unwrap();
+    assert_eq!(restarted.pending_operation_count().unwrap(), 0);
+    assert_eq!(
+        fs::read_to_string(root.path().join("Alpha/note.md")).unwrap(),
+        "restored content"
+    );
 }
 
 #[test]
