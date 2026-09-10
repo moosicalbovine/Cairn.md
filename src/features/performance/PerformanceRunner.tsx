@@ -2,6 +2,7 @@ import { editorViewCtx } from "@milkdown/kit/core";
 import { useEffect, useRef, useState } from "react";
 
 import {
+  getPerformanceScenario,
   markPerformanceReady,
   writePerformanceReport,
 } from "../../lib/tauri/performance";
@@ -54,11 +55,16 @@ export function PerformanceRunner() {
 
     void (async () => {
       try {
+        const scenario = await getPerformanceScenario();
         const source = normalDocument();
         primary = await openVisualEditor(primaryParent, source);
         await afterPaint();
         if (!active) return;
         await markPerformanceReady();
+        if (scenario === "idle") {
+          setStatus("Cairn.md is idle with one document open.");
+          return;
+        }
 
         setStatus("Measuring visual input latency…");
         const inputLatencyMs: number[] = [];

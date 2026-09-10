@@ -92,6 +92,7 @@ pub fn run() {
             commands::persistence::save_recovery_copy,
             commands::persistence::reload_document_from_disk,
             commands::performance::performance_mode,
+            commands::performance::performance_scenario,
             commands::performance::mark_performance_ready,
             commands::performance::write_performance_report,
         ])

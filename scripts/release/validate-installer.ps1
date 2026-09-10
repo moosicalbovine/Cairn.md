@@ -25,6 +25,32 @@ function Find-CairnUninstallEntry {
         Select-Object -First 1
 }
 
+function Resolve-UninstallerPath($entry) {
+    $command = [Environment]::ExpandEnvironmentVariables([string]$entry.UninstallString).Trim()
+    if (-not $command) {
+        throw 'The Cairn.md uninstall command is missing'
+    }
+    if ($command.StartsWith('"')) {
+        $closingQuote = $command.IndexOf('"', 1)
+        if ($closingQuote -lt 2) {
+            throw 'The Cairn.md uninstall command is invalid'
+        }
+        return $command.Substring(1, $closingQuote - 1)
+    }
+    if (Test-Path -LiteralPath $command) {
+        return $command
+    }
+    $executable = [regex]::Match(
+        $command,
+        '^(?<path>.+?\.exe)(?:\s|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    if (-not $executable.Success) {
+        throw 'The Cairn.md uninstall command has no executable path'
+    }
+    return $executable.Groups['path'].Value
+}
+
 try {
     $install = Start-Process -FilePath $resolvedInstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
     if ($install.ExitCode -ne 0) {
@@ -38,7 +64,14 @@ try {
     if ($entry.DisplayVersion -ne $ExpectedVersion) {
         throw "Installed version $($entry.DisplayVersion) does not match $ExpectedVersion"
     }
+    $uninstaller = Resolve-UninstallerPath $entry
+    if (-not (Test-Path -LiteralPath $uninstaller)) {
+        throw 'The Cairn.md uninstaller is missing'
+    }
     $installLocation = [string]$entry.InstallLocation
+    if (-not $installLocation) {
+        $installLocation = Split-Path -Parent $uninstaller
+    }
     if (-not $installLocation -or -not (Test-Path -LiteralPath $installLocation)) {
         throw 'The registered install location is missing'
     }
@@ -48,12 +81,8 @@ try {
     if ($null -eq $application) {
         throw 'The installed Cairn.md executable is missing'
     }
-    $uninstaller = Join-Path $installLocation 'uninstall.exe'
-    if (-not (Test-Path -LiteralPath $uninstaller)) {
-        throw 'The Cairn.md uninstaller is missing'
-    }
-
     $env:CAIRN_PERF_MODE = '1'
+    $env:CAIRN_PERF_SCENARIO = 'idle'
     $env:CAIRN_PERF_OUTPUT = $report
     $env:CAIRN_APP_DATA_DIR = $appData
     $applicationProcess = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
@@ -94,6 +123,7 @@ finally {
         Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
     }
     Remove-Item Env:CAIRN_PERF_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_SCENARIO -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_PERF_OUTPUT -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
 }

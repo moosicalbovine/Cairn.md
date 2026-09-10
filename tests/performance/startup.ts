@@ -78,7 +78,10 @@ function readProcessSample(processId: number, includeDescendants = false): Proce
   return parsed as ProcessSample;
 }
 
-function startPerformanceProcess(binaryPath: string): PerformanceProcess {
+function startPerformanceProcess(
+  binaryPath: string,
+  scenario: "full" | "idle",
+): PerformanceProcess {
   const directory = mkdtempSync(join(tmpdir(), "cairn-performance-"));
   const reportPath = join(directory, "browser-report.json");
   const child = spawn(binaryPath, [], {
@@ -87,6 +90,7 @@ function startPerformanceProcess(binaryPath: string): PerformanceProcess {
     env: {
       ...process.env,
       CAIRN_PERF_MODE: "1",
+      CAIRN_PERF_SCENARIO: scenario,
       CAIRN_PERF_OUTPUT: reportPath,
       CAIRN_APP_DATA_DIR: join(directory, "app-data"),
     },
@@ -131,7 +135,7 @@ async function waitForFile(
 
 async function measureStartup(binaryPath: string, sample: number): Promise<StartupSample> {
   const startedAt = performance.now();
-  const run = startPerformanceProcess(binaryPath);
+  const run = startPerformanceProcess(binaryPath, "idle");
   try {
     await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
     const processSample = readProcessSample(run.child.pid ?? -1);
@@ -165,22 +169,25 @@ function parseBrowserReport(path: string): BrowserReport {
   return parsed as BrowserReport;
 }
 
-async function measureBrowserAndIdle(binaryPath: string, idleSeconds: number): Promise<{
-  browser: BrowserReport;
-  idleWorkingSetMb: number;
-}> {
-  const run = startPerformanceProcess(binaryPath);
+async function measureBrowser(binaryPath: string): Promise<BrowserReport> {
+  const run = startPerformanceProcess(binaryPath, "full");
   try {
     await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
     await waitForFile(run, run.reportPath, reportTimeoutMs, "the browser measurements");
-    const browser = parseBrowserReport(run.reportPath);
+    return parseBrowserReport(run.reportPath);
+  } finally {
+    stopPerformanceProcess(run);
+  }
+}
+
+async function measureIdle(binaryPath: string, idleSeconds: number): Promise<number> {
+  const run = startPerformanceProcess(binaryPath, "idle");
+  try {
+    await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
     await delay(idleSeconds * 1_000);
     const sample = readProcessSample(run.child.pid ?? -1, true);
     if (!sample) throw new Error("Cairn.md exited before the idle-memory sample");
-    return {
-      browser,
-      idleWorkingSetMb: Number((sample.workingSetBytes / 1024 / 1024).toFixed(1)),
-    };
+    return Number((sample.workingSetBytes / 1024 / 1024).toFixed(1));
   } finally {
     stopPerformanceProcess(run);
   }
@@ -241,18 +248,19 @@ async function run(options: BenchmarkOptions): Promise<void> {
   for (let sample = 1; sample <= options.samples; sample += 1) {
     startup.push(await measureStartup(options.binaryPath, sample));
   }
-  const measured = await measureBrowserAndIdle(options.binaryPath, options.idleSeconds);
+  const browser = await measureBrowser(options.binaryPath);
+  const idleWorkingSetMb = await measureIdle(options.binaryPath, options.idleSeconds);
   const startupSummary = metricSummary(
     startup.map((sample) => sample.startupMs),
     startupLimitMs,
   );
-  const documentOpen = metricSummary(measured.browser.documentOpenMs, documentOpenLimitMs);
-  const inputLatency = metricSummary(measured.browser.inputLatencyMs, inputLatencyLimitMs);
+  const documentOpen = metricSummary(browser.documentOpenMs, documentOpenLimitMs);
+  const inputLatency = metricSummary(browser.inputLatencyMs, inputLatencyLimitMs);
   const idleMemory = {
-    value: measured.idleWorkingSetMb,
+    value: idleWorkingSetMb,
     idleSeconds: options.idleSeconds,
     limit: idleMemoryLimitMb,
-    passed: measured.idleWorkingSetMb < idleMemoryLimitMb,
+    passed: idleWorkingSetMb < idleMemoryLimitMb,
   };
   const summary = {
     benchmark: "cairn-release-performance",

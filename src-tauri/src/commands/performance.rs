@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 const PERFORMANCE_MODE: &str = "CAIRN_PERF_MODE";
 const PERFORMANCE_OUTPUT: &str = "CAIRN_PERF_OUTPUT";
+const PERFORMANCE_SCENARIO: &str = "CAIRN_PERF_SCENARIO";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,14 @@ fn validate_samples(samples: &[f64], name: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn performance_mode() -> bool {
     std::env::var(PERFORMANCE_MODE).is_ok_and(|value| value == "1")
+}
+
+#[tauri::command]
+pub fn performance_scenario() -> &'static str {
+    match std::env::var(PERFORMANCE_SCENARIO).as_deref() {
+        Ok("idle") => "idle",
+        _ => "full",
+    }
 }
 
 #[tauri::command]
