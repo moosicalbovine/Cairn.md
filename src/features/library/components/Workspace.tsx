@@ -7,6 +7,8 @@ import {
   deleteDocument,
   loadLibraryIndex,
   moveDocument,
+  previewLibraryRelink,
+  confirmLibraryRelink,
   reconcileLibraryIndex,
   renameDocument,
   renameProject,
@@ -19,6 +21,7 @@ import type { TrackedFolderSnapshot } from "../../../lib/tauri/import";
 import { AppearanceSelect } from "../../settings/appearance/AppearanceSelect";
 import type { Appearance } from "../../settings/appearance/appearance";
 import { ImportQueue } from "../import/ImportQueue";
+import { chooseLibraryRoot } from "../libraryRootPicker";
 import {
   importChosenMarkdownFiles,
   importDroppedFiles,
@@ -185,6 +188,22 @@ export function Workspace({
     setSelectedDocumentId(document.id);
   }
 
+  async function reconnectLibrary() {
+    const candidatePath = await chooseLibraryRoot();
+    if (!candidatePath) return;
+    const preview = await previewLibraryRelink(candidatePath);
+    const accepted = globalThis.confirm(
+      `Reconnect Cairn.md to “${preview.candidatePath}”?\n\n` +
+      `${preview.matchedProjects} projects and ${preview.matchedDocuments} documents match the current library.`,
+    );
+    if (!accepted) return;
+    const relinked = await confirmLibraryRelink(preview);
+    setSnapshot(relinked);
+    const firstProject = relinked.projects[0] ?? null;
+    setSelectedProjectId(firstProject?.id ?? null);
+    setSelectedDocumentId(firstProject?.documents[0]?.id ?? null);
+  }
+
   return (
     <main className="desktop-shell">
       <header className="app-titlebar">
@@ -193,7 +212,12 @@ export function Workspace({
       </header>
       {snapshot.mode === "readOnly" && (
         <div className="read-only-banner" role="status">
-          Library opened read-only: {snapshot.readOnlyReason ?? "writes are unavailable"}
+          <span>Library opened read-only: {snapshot.readOnlyReason ?? "writes are unavailable"}</span>
+          {snapshot.binding && (
+            <button type="button" onClick={() => void run(reconnectLibrary)}>
+              Reconnect library
+            </button>
+          )}
         </div>
       )}
       {notice && <div className="notice-banner" role="alert">{notice}</div>}

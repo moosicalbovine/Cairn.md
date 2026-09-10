@@ -1,13 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Workspace } from "../../src/features/library/components/Workspace";
 import type { LibrarySnapshot } from "../../src/lib/tauri/library";
 
+const libraryMocks = vi.hoisted(() => ({
+  previewLibraryRelink: vi.fn(),
+  confirmLibraryRelink: vi.fn(),
+  chooseLibraryRoot: vi.fn(),
+}));
+
 vi.mock("../../src/lib/tauri/library", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/lib/tauri/library")>()),
   watchLibraryReconciliation: vi.fn(() => () => undefined),
   reconcileLibraryIndex: vi.fn(async () => undefined),
+  previewLibraryRelink: libraryMocks.previewLibraryRelink,
+  confirmLibraryRelink: libraryMocks.confirmLibraryRelink,
+}));
+vi.mock("../../src/features/library/libraryRootPicker", () => ({
+  chooseLibraryRoot: libraryMocks.chooseLibraryRoot,
 }));
 vi.mock("../../src/features/library/tracked-folders/trackedFolderBrowser", () => ({
   addChosenTrackedFolder: vi.fn(),
@@ -125,5 +136,44 @@ describe("three-pane workspace", () => {
 
     fireEvent.click(screen.getByRole("option", { name: /brief\.md/i }));
     expect(await screen.findByTestId("document-editor")).toHaveAttribute("data-read-only", "true");
+  });
+
+  it("reconnects a moved library only after showing the match summary", async () => {
+    const readOnly = {
+      ...snapshot,
+      mode: "readOnly" as const,
+      readOnlyReason: "root_unavailable",
+    };
+    const relinked = {
+      ...snapshot,
+      binding: { ...snapshot.binding!, rootPath: "D:\\Notes", generation: 2 },
+    };
+    libraryMocks.chooseLibraryRoot.mockResolvedValue("D:\\Notes");
+    libraryMocks.previewLibraryRelink.mockResolvedValue({
+      candidatePath: "D:\\Notes",
+      libraryId: "library-1",
+      expectedGeneration: 1,
+      expectedStateToken: "state-token",
+      rootIdentity: "root-2",
+      matchedProjects: 1,
+      matchedDocuments: 1,
+      candidateManifest: "{}",
+    });
+    libraryMocks.confirmLibraryRelink.mockResolvedValue(relinked);
+    vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+
+    render(
+      <Workspace
+        initialSnapshot={readOnly}
+        initialTrackedFolders={[]}
+        appearance="dark"
+        onAppearanceChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect library" }));
+
+    await waitFor(() => expect(libraryMocks.confirmLibraryRelink).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/library opened read-only/i)).not.toBeInTheDocument();
+    expect(screen.getByText("D:\\Notes")).toBeInTheDocument();
   });
 });

@@ -132,7 +132,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .recovery-panel button:first-child { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 .read-only-banner, .notice-banner { padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
-.read-only-banner { color: #75520c; background: #fff0c9; }
+.read-only-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #75520c; background: #fff0c9; }
+.read-only-banner button { min-height: 28px; padding: 3px 9px; border: 1px solid currentColor; border-radius: 5px; color: inherit; background: transparent; font-size: 11px; }
 .notice-banner { color: var(--danger); background: light-dark(#fff1ef, #432321); }
 .startup-screen, .setup-screen { display: grid; min-height: 100vh; place-content: center; justify-items: center; padding: 40px; background: radial-gradient(circle at 20% 10%, var(--accent-soft), transparent 34rem), var(--shell); text-align: center; }
 .startup-screen { gap: 12px; color: var(--muted); }
