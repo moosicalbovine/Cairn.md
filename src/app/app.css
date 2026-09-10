@@ -145,6 +145,10 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .setup-card > p:not(.eyebrow, .inline-error) { max-width: 56ch; margin: 0 0 24px; color: var(--muted); line-height: 1.6; }
 .primary-button { min-height: 38px; padding-inline: 14px; font-size: 13px; }
 .inline-error { margin: 14px 0 0; color: var(--danger); font-size: 12px; }
+.performance-runner { display: grid; min-height: 100vh; grid-template-rows: auto minmax(0, 1fr); gap: 8px; padding: 16px; background: var(--window); }
+.performance-runner > p { margin: 0; color: var(--muted); font-size: 11px; }
+.performance-editor { min-height: 0; overflow: auto; }
+.performance-scratch { position: fixed; top: 0; left: -10000px; width: 800px; height: 600px; overflow: hidden; }
 
 @media (max-width: 900px) {
   .workspace-layout { grid-template-columns: 190px var(--contents-width) 5px minmax(0, 1fr); }

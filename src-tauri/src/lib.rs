@@ -51,7 +51,14 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let app_data_dir = app.path().app_local_data_dir()?;
+            let app_data_dir = if commands::performance::performance_mode() {
+                std::env::var_os("CAIRN_APP_DATA_DIR")
+                    .filter(|value| !value.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .ok_or("CAIRN_APP_DATA_DIR is required in performance mode")?
+            } else {
+                app.path().app_local_data_dir()?
+            };
             let library = LibraryService::open(&app_data_dir)?;
             app.manage(LibraryState::new(library));
             log::info!("Cairn.md desktop core started");
@@ -84,6 +91,9 @@ pub fn run() {
             commands::persistence::save_document,
             commands::persistence::save_recovery_copy,
             commands::persistence::reload_document_from_disk,
+            commands::performance::performance_mode,
+            commands::performance::mark_performance_ready,
+            commands::performance::write_performance_report,
         ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");

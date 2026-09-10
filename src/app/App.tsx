@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { LibrarySetup } from "../features/library/components/LibrarySetup";
 import { Workspace } from "../features/library/components/Workspace";
@@ -14,9 +14,16 @@ import {
   type LibrarySnapshot,
 } from "../lib/tauri/library";
 import { getHealth } from "../lib/tauri/health";
+import { isPerformanceMode } from "../lib/tauri/performance";
 import "./app.css";
 
-type BootState = "checking" | "ready" | "unavailable";
+const PerformanceRunner = lazy(() =>
+  import("../features/performance/PerformanceRunner").then((module) => ({
+    default: module.PerformanceRunner,
+  })),
+);
+
+type BootState = "checking" | "performance" | "ready" | "unavailable";
 
 export function App() {
   const [boot, setBoot] = useState<BootState>("checking");
@@ -36,8 +43,15 @@ export function App() {
     let active = true;
     void (async () => {
       try {
-        await getHealth();
+        const [, performanceMode] = await Promise.all([
+          getHealth(),
+          isPerformanceMode(),
+        ]);
         if (!active) return;
+        if (performanceMode) {
+          setBoot("performance");
+          return;
+        }
         const [library, tracked] = await Promise.all([
           loadCachedLibraryIndex((value) => {
             if (active) setSnapshot(value);
@@ -65,6 +79,14 @@ export function App() {
         <span className="setup-mark" aria-hidden="true">C</span>
         <p>Opening your Markdown library…</p>
       </main>
+    );
+  }
+
+  if (boot === "performance") {
+    return (
+      <Suspense fallback={<main className="startup-screen">Loading performance profile…</main>}>
+        <PerformanceRunner />
+      </Suspense>
     );
   }
 
