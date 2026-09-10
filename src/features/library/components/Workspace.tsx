@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 
 import { WorkspaceLayout } from "../../../components/layout/WorkspaceLayout";
 import {
@@ -21,6 +21,12 @@ import {
 } from "../tracked-folders/trackedFolderBrowser";
 import { ContentsPane } from "./ContentsPane";
 import { LibraryPane } from "./LibraryPane";
+
+const DocumentEditor = lazy(() =>
+  import("../../editor/components/DocumentEditor").then((module) => ({
+    default: module.DocumentEditor,
+  })),
+);
 
 type WorkspaceProps = Readonly<{
   initialSnapshot: LibrarySnapshot;
@@ -141,21 +147,19 @@ export function Workspace({
           />
         }
         editor={
-          <div className="editor-empty">
-            {selectedDocument ? (
-              <>
-                <span className="pane-kicker">Document</span>
-                <h2>{selectedDocument.relativePath.split("/").at(-1)}</h2>
-                <p>The verified Markdown editor is loading in the next workspace slice.</p>
-              </>
-            ) : (
+          selectedDocument ? (
+            <Suspense fallback={<div className="editor-message">Loading editor…</div>}>
+              <DocumentEditor key={selectedDocument.id} document={selectedDocument} />
+            </Suspense>
+          ) : (
+            <div className="editor-empty">
               <>
                 <span className="empty-glyph" aria-hidden="true">M↓</span>
                 <h2>Select a Markdown document</h2>
                 <p>Your document will open here while the project contents remain available.</p>
               </>
-            )}
-          </div>
+            </div>
+          )
         }
       />
     </main>

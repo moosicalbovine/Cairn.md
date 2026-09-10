@@ -87,6 +87,32 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .editor-empty p { max-width: 46ch; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .empty-glyph { display: grid; width: 52px; height: 52px; place-items: center; border: 1px solid var(--line); border-radius: 14px; color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 
+.document-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.document-header { display: flex; min-height: 62px; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.document-header h2 { overflow: hidden; max-width: 52vw; margin: 2px 0 0; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--content); }
+.mode-switch button { min-width: 58px; min-height: 27px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; }
+.mode-switch button[data-selected="true"] { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+.visual-editor-shell { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.formatting-toolbar { display: flex; min-width: 0; min-height: 42px; align-items: center; gap: 4px; padding: 6px 10px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.formatting-toolbar button { flex: 0 0 auto; min-height: 28px; padding: 3px 8px; border: 1px solid transparent; border-radius: 5px; background: transparent; font-size: 11px; }
+.formatting-toolbar button:hover, .formatting-toolbar button:focus-visible { border-color: var(--line); background: var(--content); outline: none; }
+.visual-editor { min-height: 0; overflow: auto; padding: 28px clamp(24px, 7vw, 88px) 64px; }
+.visual-segment, .source-backed-block { width: min(100%, 800px); margin: 0 auto; }
+.visual-segment .milkdown .ProseMirror { min-height: 1.5em; padding: 0; outline: none; color: var(--ink); font-family: Georgia, "Times New Roman", serif; font-size: 17px; line-height: 1.72; }
+.visual-segment .milkdown .ProseMirror h1, .visual-segment .milkdown .ProseMirror h2, .visual-segment .milkdown .ProseMirror h3 { line-height: 1.2; }
+.visual-segment .milkdown .ProseMirror a { color: var(--accent); }
+.visual-segment .milkdown .ProseMirror code, .source-backed-block pre { font-family: "Cascadia Code", Consolas, monospace; }
+.source-backed-block { margin-block: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--content); }
+.source-backed-block > div { display: flex; align-items: center; justify-content: space-between; padding: 6px 9px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.source-backed-block button { border: 0; background: transparent; color: var(--accent); font-size: 10px; }
+.source-backed-block pre { margin: 0; padding: 12px; overflow: auto; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+.source-editor { min-width: 0; min-height: 0; overflow: hidden; }
+.source-editor .cm-editor { height: 100%; color: var(--ink); background: var(--editor); }
+.source-editor .cm-scroller { padding: 20px clamp(18px, 5vw, 64px) 54px; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; line-height: 1.65; }
+.source-editor .cm-gutters { color: var(--muted); background: var(--content); border-color: var(--line); }
+.editor-message { align-self: start; margin: 24px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--content); font-size: 12px; }
+
 .read-only-banner, .notice-banner { padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .read-only-banner { color: #75520c; background: #fff0c9; }
 .notice-banner { color: var(--danger); background: light-dark(#fff1ef, #432321); }

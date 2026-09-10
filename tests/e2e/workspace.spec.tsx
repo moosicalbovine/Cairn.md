@@ -10,6 +10,11 @@ vi.mock("../../src/features/library/tracked-folders/trackedFolderBrowser", () =>
   importTrackedFile: vi.fn(),
   loadTrackedFolders: vi.fn(async () => []),
 }));
+vi.mock("../../src/features/editor/components/DocumentEditor", () => ({
+  DocumentEditor: ({ document }: { document: { relativePath: string } }) => (
+    <h2>{document.relativePath.split("/").at(-1)}</h2>
+  ),
+}));
 
 const snapshot: LibrarySnapshot = {
   mode: "writable",
