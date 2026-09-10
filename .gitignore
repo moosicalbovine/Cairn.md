@@ -3,6 +3,7 @@ build/
 dist/
 out/
 target/
+performance-results/
 
 # Dependencies and caches
 node_modules/

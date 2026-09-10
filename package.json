@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest",
     "test:markdown": "vitest run src/features/editor/markdown/roundtrip.test.ts tests/e2e/editor-modes.spec.ts",
+    "perf:startup": "node --experimental-strip-types tests/performance/startup.ts",
     "tauri": "tauri"
   },
   "dependencies": {
