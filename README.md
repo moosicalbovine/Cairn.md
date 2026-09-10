@@ -3,7 +3,7 @@
 Cairn.md is a lightweight Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
 
 > [!IMPORTANT]
-> Cairn.md is under active development at `v0.1.0`. There is no supported installer yet.
+> Cairn.md is under active development at `v0.1.0`. CI produces an unsigned Windows installer, but there is no signed public release yet.
 
 ## Why Cairn.md?
 
@@ -52,7 +52,11 @@ Cairn.md will provide a personal managed library that keeps Markdown files easy 
 
 ## Documentation
 
-- [Planned user guide](docs/USER_GUIDE.md)
+- [User guide](docs/USER_GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Performance contract](docs/PERFORMANCE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Release process](docs/RELEASE.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## Contributing

@@ -12,7 +12,7 @@ Cairn.md is under active `v0.1.0` development. Contributions are most useful whe
 - Report an accessibility or usability concern.
 - Suggest a focused improvement to the product specification.
 - Improve documentation, examples, or terminology.
-- Contribute code after the implementation architecture and development workflow are documented.
+- Contribute focused code changes with tests and documentation where behavior changes.
 
 ## Contribution guidelines
 
@@ -32,6 +32,32 @@ docs: clarify the import workflow
 feat(editor): add visual task-list editing
 fix(library): preserve projects after moving the library root
 ```
+
+## Local development on Windows
+
+Install:
+
+- Node.js 24 or newer;
+- the stable Rust toolchain with `rustfmt` and `clippy`;
+- Visual Studio 2022 Build Tools with **Desktop development with C++**, including the MSVC linker and Windows SDK; and
+- Microsoft Edge WebView2 Runtime.
+
+Visual Studio Code is a useful editor but does not include the MSVC linker. If Rust reports that `link.exe` is missing, add the Visual Studio C++ workload before retrying.
+
+From the repository root:
+
+```powershell
+npm ci
+npm run lint
+npm run typecheck
+npm test -- --run
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --all-features
+npm run tauri build
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing persistence or filesystem behavior. Those paths fail closed intentionally and require fault-injection coverage.
 
 ## Licensing contributions
 

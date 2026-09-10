@@ -1,7 +1,7 @@
 # Cairn.md User Guide
 
 > [!NOTE]
-> Cairn.md is under active `v0.1.0` development. This guide describes the intended product experience and will be updated as the application is implemented.
+> Cairn.md is under active `v0.1.0` development. Screens and wording may still change before the first signed release.
 
 ## What Cairn.md is for
 
@@ -41,7 +41,7 @@ The app privately records the original path and import date for reference. This 
 
 Importing the same source more than once creates another copy. If a filename already exists in the destination project, Cairn.md chooses an available name such as `proposal (2).md`; you can rename it afterward.
 
-## Planned v0.1.0 workflow
+## v0.1.0 workflow
 
 ### 1. Choose or reconnect a library
 
@@ -51,7 +51,7 @@ On first launch:
 2. Cairn.md validates that it can read and write there.
 3. The app opens the library workspace.
 
-If you later move the library folder, use **Reconnect library** and select its new location.
+If you later move the library folder, Cairn.md opens the cached library read-only. Select **Reconnect library**, choose the new location, review the project and document match count, and confirm the new binding.
 
 ### 2. Create a project
 
@@ -93,7 +93,9 @@ There is no separate Preview or Split mode in `v0.1.0` because Visual mode is al
 
 Autosave is always enabled. The normal document indicator is **Saved**; brief **Saving…** feedback may appear while a disk write completes.
 
-If saving fails, Cairn.md keeps the recoverable editing buffer and explains what prevented the write. After an unexpected shutdown, the application restores all but at most the final two seconds of recent work.
+The only persistence labels are **Saving…**, **Saved**, **Save failed**, and **Recovered**. If saving fails, use **Retry** after correcting the problem. If the file changed outside Cairn.md, autosave stops and preserves both the local draft and the external file. You can reload the latest external file or save the draft as a separately numbered recovered copy.
+
+After an unexpected shutdown, Cairn.md offers the latest durable editing snapshot. Continuous typing does not postpone recovery snapshots, and closing a document flushes its acknowledged revision before releasing the session.
 
 ## Markdown compatibility
 
@@ -129,7 +131,7 @@ Changing the appearance never changes document content.
 - No account or cloud service is required.
 - Moving or sharing a `.md` file shares only its document content.
 
-You remain responsible for backing up the chosen library folder. Cairn.md's future backup guidance will also cover its private metadata.
+Back up the chosen library folder to protect the portable Markdown files. Cairn.md keeps its private SQLite index and recovery records in its Windows app-local-data directory; include that app data in a full disaster-recovery backup. The library remains usable as ordinary folders and `.md` files even without the private metadata.
 
 ## SemVer roadmap
 
