@@ -251,6 +251,32 @@ describe("AutosaveController", () => {
     );
   });
 
+  it("makes the latest revision durable before navigation without closing the session", async () => {
+    vi.useFakeTimers();
+    const storeRecoverySnapshot = vi.fn(async (request) => snapshotOf(request));
+    const session = MarkdownSession.fromSource("");
+    const controller = new AutosaveController({
+      documentId: "document-1",
+      session,
+      baseFingerprint: "base-0",
+      generation: "generation-1",
+      onProgress: vi.fn(),
+      port: {
+        storeRecoverySnapshot,
+        saveDocument: vi.fn(),
+      },
+    });
+
+    session.replaceSource("safe to leave", 0);
+    await controller.ensureRecoveryDurable();
+
+    expect(storeRecoverySnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ revision: 1, bytes: new TextEncoder().encode("safe to leave") }),
+    );
+    expect(() => session.replaceSource("still open", 1)).not.toThrow();
+    await controller.dispose();
+  });
+
   it("advances durable recovery on a bounded cadence during continuous typing", async () => {
     vi.useFakeTimers();
     const durableRevisions: number[] = [];

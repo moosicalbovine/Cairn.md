@@ -96,13 +96,31 @@ export class AutosaveController {
     this.#scheduleSave(0);
   }
 
+  async ensureRecoveryDurable(): Promise<void> {
+    if (this.#disposed) return;
+    if (this.#snapshotTimer !== null) {
+      clearTimeout(this.#snapshotTimer);
+      this.#snapshotTimer = null;
+    }
+    try {
+      await this.#flushRecovery();
+    } catch (reason) {
+      this.#failed = true;
+      this.#emit("Save failed");
+      throw reason;
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#unsubscribe();
     this.#clearTimers();
-    await this.#flushRecovery();
-    this.#session.close();
+    try {
+      await this.#flushRecovery();
+    } finally {
+      this.#session.close();
+    }
   }
 
   #acknowledgeEdit(): void {

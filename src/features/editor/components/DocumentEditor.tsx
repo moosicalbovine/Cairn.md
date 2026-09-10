@@ -1,4 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import {
   readDocument,
@@ -35,15 +44,19 @@ type DocumentEditorProps = Readonly<{
   onRecoveryCopySaved?(document: DocumentSnapshot): void;
 }>;
 
+export type DocumentEditorHandle = Readonly<{
+  ensureRecoveryDurable(): Promise<void>;
+}>;
+
 function nameOf(document: DocumentSnapshot): string {
   return document.relativePath.split("/").at(-1) ?? document.relativePath;
 }
 
-export function DocumentEditor({
+export const DocumentEditor = forwardRef<DocumentEditorHandle, DocumentEditorProps>(function DocumentEditor({
   document,
   readOnly = false,
   onRecoveryCopySaved,
-}: DocumentEditorProps) {
+}, ref) {
   const [editor, setEditor] = useState<EditorSession | null>(null);
   const [mode, setMode] = useState<EditorMode>(readOnly ? "source" : "visual");
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +66,12 @@ export function DocumentEditor({
   const editorRef = useRef<EditorSession | null>(null);
   const autosaveRef = useRef<AutosaveController | null>(null);
   const sessionEpochRef = useRef(0);
+
+  useImperativeHandle(ref, () => ({
+    async ensureRecoveryDurable() {
+      await autosaveRef.current?.ensureRecoveryDurable();
+    },
+  }), []);
 
   const startSession = useCallback((
     bytes: Uint8Array,
@@ -281,4 +300,4 @@ export function DocumentEditor({
       )}
     </div>
   );
-}
+});

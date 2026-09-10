@@ -9,6 +9,9 @@ const libraryMocks = vi.hoisted(() => ({
   confirmLibraryRelink: vi.fn(),
   chooseLibraryRoot: vi.fn(),
 }));
+const editorMocks = vi.hoisted(() => ({
+  ensureRecoveryDurable: vi.fn(async (): Promise<void> => undefined),
+}));
 
 vi.mock("../../src/lib/tauri/library", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/lib/tauri/library")>()),
@@ -32,19 +35,27 @@ vi.mock("../../src/features/library/import/importAdapters", () => ({
   importDroppedFiles: vi.fn(async () => []),
   listenForDroppedFiles: vi.fn(async () => () => undefined),
 }));
-vi.mock("../../src/features/editor/components/DocumentEditor", () => ({
-  DocumentEditor: ({
-    document,
-    readOnly,
-  }: {
-    document: { relativePath: string };
-    readOnly?: boolean;
-  }) => (
-    <div data-testid="document-editor" data-read-only={String(readOnly)}>
-      <h2>{document.relativePath.split("/").at(-1)}</h2>
-    </div>
-  ),
-}));
+vi.mock("../../src/features/editor/components/DocumentEditor", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    DocumentEditor: forwardRef(function MockDocumentEditor({
+      document,
+      readOnly,
+    }: {
+      document: { relativePath: string };
+      readOnly?: boolean;
+    }, ref) {
+      useImperativeHandle(ref, () => ({
+        ensureRecoveryDurable: editorMocks.ensureRecoveryDurable,
+      }));
+      return (
+        <div data-testid="document-editor" data-read-only={String(readOnly)}>
+          <h2>{document.relativePath.split("/").at(-1)}</h2>
+        </div>
+      );
+    }),
+  };
+});
 
 const snapshot: LibrarySnapshot = {
   mode: "writable",
@@ -114,6 +125,43 @@ describe("three-pane workspace", () => {
       "Follow WindowsLightDark",
     );
     expect(screen.queryByText(/preview|split/i)).not.toBeInTheDocument();
+  });
+
+  it("waits for durable recovery before opening another document", async () => {
+    let releaseRecovery: (() => void) | undefined;
+    editorMocks.ensureRecoveryDurable.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        releaseRecovery = resolve;
+      }),
+    );
+    const secondDocument = {
+      ...snapshot.projects[0]!.documents[0]!,
+      id: "document-2",
+      relativePath: "Alpha/notes.md",
+    };
+    render(
+      <Workspace
+        initialSnapshot={{
+          ...snapshot,
+          projects: [{
+            ...snapshot.projects[0]!,
+            documents: [...snapshot.projects[0]!.documents, secondDocument],
+          }],
+        }}
+        initialTrackedFolders={[]}
+        appearance="followWindows"
+        onAppearanceChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /brief\.md/i }));
+    expect(await screen.findByRole("heading", { name: "brief.md" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /notes\.md/i }));
+
+    expect(editorMocks.ensureRecoveryDurable).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: "brief.md" })).toBeInTheDocument();
+    releaseRecovery?.();
+    expect(await screen.findByRole("heading", { name: "notes.md" })).toBeInTheDocument();
   });
 
   it("disables library mutations and editing when the library is read-only", async () => {

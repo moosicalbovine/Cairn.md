@@ -36,6 +36,7 @@ import {
 } from "../tracked-folders/trackedFolderBrowser";
 import { ContentsPane } from "./ContentsPane";
 import { LibraryPane } from "./LibraryPane";
+import type { DocumentEditorHandle } from "../../editor/components/DocumentEditor";
 
 const DocumentEditor = lazy(() =>
   import("../../editor/components/DocumentEditor").then((module) => ({
@@ -77,6 +78,7 @@ export function Workspace({
   const [contentsVisible, setContentsVisible] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const importQueue = useRef(new ImportQueue());
+  const documentEditor = useRef<DocumentEditorHandle>(null);
 
   const selectedProject =
     snapshot.projects.find((project) => project.id === selectedProjectId) ?? null;
@@ -147,7 +149,11 @@ export function Workspace({
           });
           if (!active) return;
           const latest = result.imported.at(-1);
-          if (latest) setSelectedDocumentId(latest.document.id);
+          if (latest) {
+            await documentEditor.current?.ensureRecoveryDurable();
+            if (!active) return;
+            setSelectedDocumentId(latest.document.id);
+          }
           setNotice(importNotice(result));
         } catch (reason) {
           if (active) {
@@ -173,10 +179,33 @@ export function Workspace({
     };
   }, [canMutate, selectedProjectId]);
 
+  async function ensureRecoveryDurable() {
+    await documentEditor.current?.ensureRecoveryDurable();
+  }
+
+  async function changeSelection(
+    projectId: string | null,
+    documentId: string | null,
+  ) {
+    if (
+      projectId === selectedProjectId &&
+      documentId === selectedDocumentId
+    ) {
+      return;
+    }
+    await ensureRecoveryDurable();
+    setSelectedProjectId(projectId);
+    setSelectedDocumentId(documentId);
+  }
+
   async function refresh(preferredDocumentId?: string) {
     const next = await loadLibraryIndex(setSnapshot);
-    if (preferredDocumentId) setSelectedDocumentId(preferredDocumentId);
-    if (!selectedProjectId && next.projects[0]) setSelectedProjectId(next.projects[0].id);
+    const projectId = selectedProjectId ?? next.projects[0]?.id ?? null;
+    if (preferredDocumentId) {
+      await changeSelection(projectId, preferredDocumentId);
+    } else if (!selectedProjectId && projectId) {
+      await changeSelection(projectId, null);
+    }
   }
 
   async function run(action: () => Promise<void>) {
@@ -189,12 +218,11 @@ export function Workspace({
   }
 
   function selectProject(project: ProjectSnapshot) {
-    setSelectedProjectId(project.id);
-    setSelectedDocumentId(project.documents[0]?.id ?? null);
+    void run(() => changeSelection(project.id, project.documents[0]?.id ?? null));
   }
 
   function selectDocument(document: DocumentSnapshot) {
-    setSelectedDocumentId(document.id);
+    void run(() => changeSelection(selectedProjectId, document.id));
   }
 
   async function reconnectLibrary() {
@@ -206,6 +234,7 @@ export function Workspace({
       `${preview.matchedProjects} projects and ${preview.matchedDocuments} documents match the current library.`,
     );
     if (!accepted) return;
+    await ensureRecoveryDurable();
     const relinked = await confirmLibraryRelink(preview);
     setSnapshot(relinked);
     const firstProject = relinked.projects[0] ?? null;
@@ -243,6 +272,7 @@ export function Workspace({
             onCreateProject={() => void run(async () => {
               const name = askForName("Project name", "New project");
               if (!name) return;
+              await ensureRecoveryDurable();
               const project = await createProject(name);
               await refresh();
               setSelectedProjectId(project.id);
@@ -308,6 +338,7 @@ export function Workspace({
                 (project) => project.relativePath.toLocaleLowerCase() === name.toLocaleLowerCase(),
               );
               if (!destination) throw new Error(`No project named “${name}” was found.`);
+              await ensureRecoveryDurable();
               await moveDocument(document.id, destination.id);
               setSelectedProjectId(destination.id);
               await refresh(document.id);
@@ -315,6 +346,7 @@ export function Workspace({
             onDeleteDocument={(document) => void run(async () => {
               const name = document.relativePath.split("/").at(-1) ?? document.relativePath;
               if (!globalThis.confirm(`Delete “${name}”? Cairn.md will use the Recycle Bin when available.`)) return;
+              await ensureRecoveryDurable();
               await deleteDocument(document.id);
               setSelectedDocumentId(null);
               await refresh();
@@ -325,6 +357,7 @@ export function Workspace({
           selectedDocument ? (
             <Suspense fallback={<div className="editor-message">Loading editor…</div>}>
               <DocumentEditor
+                ref={documentEditor}
                 key={selectedDocument.id}
                 document={selectedDocument}
                 readOnly={!canMutate}
