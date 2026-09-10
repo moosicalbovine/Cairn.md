@@ -314,21 +314,21 @@ pub fn file_identity(path: &Path) -> Result<Option<String>, LibraryError> {
     {
         let handle = winapi_util::Handle::from_path_any(path).map_err(LibraryError::io)?;
         let information = winapi_util::file::information(&handle).map_err(LibraryError::io)?;
-        return Ok(Some(format!(
+        Ok(Some(format!(
             "win:{:x}:{:x}",
             information.volume_serial_number(),
             information.file_index()
-        )));
+        )))
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let metadata = fs::metadata(path).map_err(LibraryError::io)?;
-        return Ok(Some(format!(
+        Ok(Some(format!(
             "unix:{:x}:{:x}",
             metadata.dev(),
             metadata.ino()
-        )));
+        )))
     }
     #[cfg(not(any(windows, unix)))]
     {
@@ -387,7 +387,7 @@ fn is_link_or_reparse(path: &Path) -> Result<bool, LibraryError> {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return Ok(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0);
+        Ok(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
     }
     #[cfg(not(windows))]
     {
