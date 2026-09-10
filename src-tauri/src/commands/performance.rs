@@ -73,8 +73,8 @@ mod tests {
 
     #[test]
     fn performance_reports_require_twenty_valid_samples() {
-        assert!(validate_samples(&vec![1.0; 20], "metric").is_ok());
-        assert!(validate_samples(&vec![1.0; 19], "metric").is_err());
+        assert!(validate_samples(&[1.0; 20], "metric").is_ok());
+        assert!(validate_samples(&[1.0; 19], "metric").is_err());
         let mut invalid = vec![1.0; 20];
         invalid[4] = f64::NAN;
         assert!(validate_samples(&invalid, "metric").is_err());
