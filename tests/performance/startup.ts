@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpus, release as osRelease, tmpdir, totalmem, version as osVersion } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 type ProcessSample = Readonly<{
@@ -257,7 +257,17 @@ async function run(options: BenchmarkOptions): Promise<void> {
   const summary = {
     benchmark: "cairn-release-performance",
     measuredAt: new Date().toISOString(),
+    commit: process.env.GITHUB_SHA ?? "local",
     binaryPath: options.binaryPath,
+    environment: {
+      platform: process.platform,
+      architecture: process.arch,
+      osVersion: osVersion(),
+      osRelease: osRelease(),
+      cpu: cpus()[0]?.model ?? "unknown",
+      logicalProcessors: cpus().length,
+      installedMemoryGb: Number((totalmem() / 1024 / 1024 / 1024).toFixed(1)),
+    },
     startupRuns: startup,
     startupMs: startupSummary,
     documentOpenMs: documentOpen,

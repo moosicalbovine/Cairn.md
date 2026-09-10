@@ -15,6 +15,8 @@ Cairn.md v0.1.0 targets a responsive Windows desktop experience without bundling
 
 No result is marked as passing until raw samples from the reference profile are retained. Hosted CI results may be useful comparisons, but they do not replace the release profile because virtual-machine load and WebView2 versions vary.
 
+The manually dispatched `Release performance` GitHub Actions workflow runs the same gate on a clean Windows hosted runner and retains its JSON output for 30 days. Release sign-off repeats it on the documented reference machine.
+
 ## Startup and memory measurement
 
 Build the release binary, then run at least 20 independent launches:
