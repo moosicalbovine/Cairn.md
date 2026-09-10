@@ -95,7 +95,7 @@ Autosave is always enabled. The normal document indicator is **Saved**; brief **
 
 The only persistence labels are **Saving…**, **Saved**, **Save failed**, and **Recovered**. If saving fails, use **Retry** after correcting the problem. If the file changed outside Cairn.md, autosave stops and preserves both the local draft and the external file. You can reload the latest external file or save the draft as a separately numbered recovered copy.
 
-After an unexpected shutdown, Cairn.md offers the latest durable editing snapshot. Continuous typing does not postpone recovery snapshots, and closing a document flushes its acknowledged revision before releasing the session.
+After an unexpected shutdown, Cairn.md offers the latest durable editing snapshot. Continuous typing does not postpone recovery snapshots. Switching documents or projects and closing the app wait for the acknowledged revision to reach recovery storage; if that write fails, Cairn.md keeps the current document or window open and shows the error.
 
 ## Markdown compatibility
 

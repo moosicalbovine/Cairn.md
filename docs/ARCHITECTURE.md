@@ -53,7 +53,7 @@ Each writable document has one serial autosave controller and three revisions:
 - durable snapshot revision stored in SQLite; and
 - disk revision proven in the Markdown file.
 
-Recovery uses a bounded cadence during continuous typing and flushes before session disposal. Disk saves are coalesced, with at most one save in flight. **Saved** appears only when disk and editor revisions match.
+Recovery uses a bounded cadence during continuous typing. Document and project transitions await a durable recovery barrier before releasing the active session. The Windows close-request handler applies the same barrier before destroying the app window and cancels exit if recovery storage is unavailable. Disk saves are coalesced, with at most one save in flight. **Saved** appears only when disk and editor revisions match.
 
 Watcher events are hints. Rust performs an authoritative scan before updating the index. A clean active session reloads an external change. If local work is pending, the protected save records both sides, stops autosave, and requires explicit reload or recovered-copy resolution. Reconciliation never cascade-deletes a pending recovery record when an external file or project disappears.
 

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { WorkspaceLayout } from "../../../components/layout/WorkspaceLayout";
 import {
@@ -119,6 +120,51 @@ export function Workspace({
       ),
     [],
   );
+
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let active = true;
+    let closing = false;
+    let stopListening: (() => void) | undefined;
+
+    void appWindow.onCloseRequested(async (event) => {
+      event.preventDefault();
+      if (closing) return;
+      closing = true;
+      try {
+        await documentEditor.current?.ensureRecoveryDurable();
+        await appWindow.destroy();
+      } catch (reason) {
+        closing = false;
+        if (active) {
+          setNotice(
+            reason instanceof Error
+              ? reason.message
+              : "Cairn.md could not preserve the active draft before closing.",
+          );
+        }
+      }
+    }).then(
+      (stop) => {
+        if (active) stopListening = stop;
+        else stop();
+      },
+      (reason) => {
+        if (active) {
+          setNotice(
+            reason instanceof Error
+              ? reason.message
+              : "Cairn.md could not protect the active draft when closing.",
+          );
+        }
+      },
+    );
+
+    return () => {
+      active = false;
+      stopListening?.();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
