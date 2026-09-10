@@ -109,7 +109,24 @@ function stopPerformanceProcess(run: PerformanceProcess): void {
       windowsHide: true,
     });
   }
-  rmSync(run.directory, { recursive: true, force: true });
+  try {
+    rmSync(run.directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (reason) {
+    const code =
+      typeof reason === "object" && reason !== null && "code" in reason
+        ? reason.code
+        : undefined;
+    if (code === "EPERM" || code === "EBUSY" || code === "ENOTEMPTY") {
+      process.stderr.write("Warning: Windows deferred cleanup of isolated benchmark data.\n");
+      return;
+    }
+    throw reason;
+  }
 }
 
 async function delay(milliseconds: number): Promise<void> {

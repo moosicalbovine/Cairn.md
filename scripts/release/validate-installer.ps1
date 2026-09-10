@@ -68,9 +68,11 @@ try {
     if (-not (Test-Path -LiteralPath $uninstaller)) {
         throw 'The Cairn.md uninstaller is missing'
     }
-    $installLocation = [string]$entry.InstallLocation
-    if (-not $installLocation) {
-        $installLocation = Split-Path -Parent $uninstaller
+    $registeredLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
+    $installLocation = if ($registeredLocation -and (Test-Path -LiteralPath $registeredLocation)) {
+        $registeredLocation
+    } else {
+        Split-Path -Parent $uninstaller
     }
     if (-not $installLocation -or -not (Test-Path -LiteralPath $installLocation)) {
         throw 'The registered install location is missing'
