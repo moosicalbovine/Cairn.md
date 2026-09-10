@@ -894,6 +894,130 @@ impl LibraryService {
         })
     }
 
+    pub fn save_document_interrupted_for_test(
+        &mut self,
+        request: RecoverySnapshotRequest,
+        stop_after: JournalPhase,
+    ) -> Result<(), LibraryError> {
+        self.save_document_through_phase_for_test(request, stop_after, false)
+    }
+
+    pub fn save_document_interrupted_after_replace_before_phase_for_test(
+        &mut self,
+        request: RecoverySnapshotRequest,
+    ) -> Result<(), LibraryError> {
+        self.save_document_through_phase_for_test(request, JournalPhase::FilesystemFinalized, true)
+    }
+
+    fn save_document_through_phase_for_test(
+        &mut self,
+        request: RecoverySnapshotRequest,
+        stop_after: JournalPhase,
+        stop_before_finalize_record: bool,
+    ) -> Result<(), LibraryError> {
+        let intended_fingerprint = validate_snapshot_request(&request)?;
+        let snapshot = self
+            .load_recovery_snapshot(&request.document_id)?
+            .ok_or_else(|| LibraryError::new("recovery_missing", "No recovery snapshot exists"))?;
+        if snapshot.session_generation != request.session_generation
+            || snapshot.revision != request.revision
+            || snapshot.bytes != request.bytes
+            || snapshot.base_fingerprint != request.base_fingerprint
+            || snapshot.intended_disk_hash != intended_fingerprint
+        {
+            return Err(LibraryError::new(
+                "recovery_mismatch",
+                "The save request does not match its durable recovery snapshot",
+            ));
+        }
+        let binding = self.required_writable_binding()?;
+        let document = self.document_by_id(&request.document_id)?;
+        let project = self.project_for_document(&request.document_id)?;
+        self.verified_project_path(&binding, &project.id, &project.relative_path)?;
+        let operation_id = Uuid::new_v4().to_string();
+        let temporary_relative = document_relative_path(
+            &project.relative_path,
+            &format!(".cairn-save-{operation_id}.tmp"),
+        );
+        let backup_relative = document_relative_path(
+            &project.relative_path,
+            &format!(".cairn-save-{operation_id}.backup"),
+        );
+        let payload = OperationPayload::SaveDocument {
+            document_id: request.document_id.clone(),
+            relative_path: document.relative_path.clone(),
+            session_generation: request.session_generation.clone(),
+            revision: request.revision,
+            intended_fingerprint: intended_fingerprint.clone(),
+            backup_relative_path: backup_relative.clone(),
+        };
+        self.insert_operation(
+            &operation_id,
+            &binding.library_id,
+            "save_document",
+            &payload,
+            Some(&temporary_relative),
+            Some(&request.base_fingerprint),
+        )?;
+        self.database_mut()?.connection_mut().execute(
+            "UPDATE recovery_snapshots SET operation_id = ?1, lifecycle_state = ?2 WHERE document_id = ?3 AND session_generation = ?4 AND revision = ?5",
+            params![&operation_id, RecoveryLifecycle::Saving.as_str(), &request.document_id, &request.session_generation, request.revision],
+        ).map_err(LibraryError::database)?;
+        if stop_after == JournalPhase::IntentRecorded {
+            return Ok(());
+        }
+
+        let temporary = resolve_new(&binding.root_path, &temporary_relative)?;
+        write_durable(&temporary, &request.bytes)?;
+        self.update_operation(
+            &operation_id,
+            JournalPhase::TemporaryDurable,
+            None,
+            file_identity(&temporary)?.as_deref(),
+        )?;
+        if stop_after == JournalPhase::TemporaryDurable {
+            return Ok(());
+        }
+
+        let target = resolve_new(&binding.root_path, &document.relative_path)?;
+        let backup = resolve_new(&binding.root_path, &backup_relative)?;
+        let expected_identity = self.document_identity(&request.document_id)?;
+        let replaced = replace_if_unchanged(
+            &target,
+            &temporary,
+            &backup,
+            &request.base_fingerprint,
+            expected_identity.as_deref(),
+            &intended_fingerprint,
+        )?;
+        if stop_before_finalize_record {
+            return Ok(());
+        }
+        self.update_operation(
+            &operation_id,
+            JournalPhase::FilesystemFinalized,
+            Some(&replaced.fingerprint),
+            replaced.file_identity.as_deref(),
+        )?;
+        if stop_after == JournalPhase::FilesystemFinalized {
+            return Ok(());
+        }
+
+        self.commit_saved_document(
+            &operation_id,
+            &request.document_id,
+            &request.session_generation,
+            request.revision,
+            &intended_fingerprint,
+            replaced.file_identity.as_deref(),
+        )?;
+        if stop_after == JournalPhase::MetadataCommitted {
+            return Ok(());
+        }
+        cleanup_owned_artifact(&backup, &request.base_fingerprint)?;
+        self.finish_operation(&operation_id)
+    }
+
     pub fn save_recovery_copy(
         &mut self,
         document_id: &str,

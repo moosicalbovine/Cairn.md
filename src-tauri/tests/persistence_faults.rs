@@ -1,4 +1,4 @@
-use cairn_md_lib::domain::library::LibraryService;
+use cairn_md_lib::domain::library::{JournalPhase, LibraryService};
 use std::fs;
 
 use cairn_md_lib::domain::recovery::{RecoveryLifecycle, RecoverySnapshotRequest, SaveStatus};
@@ -170,6 +170,7 @@ fn external_change_is_preserved_beside_the_recoverable_draft() {
     assert_eq!(recovery.lifecycle_state, RecoveryLifecycle::Conflict);
     assert_eq!(service.pending_operation_count().unwrap(), 0);
 
+    fs::write(root.path().join("Alpha/draft.md"), "external edit again").unwrap();
     let recovered_copy = service
         .save_recovery_copy(&document_id, &generation)
         .unwrap();
@@ -180,9 +181,121 @@ fn external_change_is_preserved_beside_the_recoverable_draft() {
     );
     assert_eq!(
         fs::read_to_string(root.path().join("Alpha/draft.md")).unwrap(),
-        "external edit"
+        "external edit again"
     );
     assert!(service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn deleting_external_file_during_resolution_does_not_lose_the_local_draft() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    let draft = request(
+        &document_id,
+        &generation,
+        1,
+        &base_fingerprint,
+        "local survives deletion",
+    );
+    service.store_recovery_snapshot(draft.clone()).unwrap();
+    fs::write(root.path().join("Alpha/draft.md"), "external").unwrap();
+    assert_eq!(
+        service.save_document(draft).unwrap().status,
+        SaveStatus::Conflict
+    );
+    fs::remove_file(root.path().join("Alpha/draft.md")).unwrap();
+
+    let recovered_copy = service
+        .save_recovery_copy(&document_id, &generation)
+        .unwrap();
+
+    assert_eq!(
+        fs::read(root.path().join(recovered_copy.relative_path)).unwrap(),
+        b"local survives deletion"
+    );
+    assert!(!root.path().join("Alpha/draft.md").exists());
+}
+
+#[test]
+fn save_journal_replays_every_recorded_phase_and_is_idempotent() {
+    for phase in [
+        JournalPhase::IntentRecorded,
+        JournalPhase::TemporaryDurable,
+        JournalPhase::FilesystemFinalized,
+        JournalPhase::MetadataCommitted,
+        JournalPhase::CleanupComplete,
+    ] {
+        let (app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+        let generation = Uuid::new_v4().to_string();
+        let draft = request(
+            &document_id,
+            &generation,
+            1,
+            &base_fingerprint,
+            "journal replay",
+        );
+        service.store_recovery_snapshot(draft.clone()).unwrap();
+        service
+            .save_document_interrupted_for_test(draft, phase)
+            .unwrap();
+        drop(service);
+
+        let reopened = LibraryService::open(app_data.path()).unwrap();
+        assert_eq!(
+            fs::read(root.path().join("Alpha/draft.md")).unwrap(),
+            b"journal replay",
+            "phase {phase:?}"
+        );
+        assert!(reopened
+            .load_recovery_snapshot(&document_id)
+            .unwrap()
+            .is_none());
+        assert_eq!(reopened.pending_operation_count().unwrap(), 0);
+        assert!(fs::read_dir(root.path().join("Alpha"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".cairn-save-")));
+        drop(reopened);
+
+        let reopened_again = LibraryService::open(app_data.path()).unwrap();
+        assert_eq!(reopened_again.pending_operation_count().unwrap(), 0);
+        assert_eq!(
+            fs::read(root.path().join("Alpha/draft.md")).unwrap(),
+            b"journal replay"
+        );
+    }
+}
+
+#[test]
+fn save_journal_recognizes_replacement_completed_before_phase_record() {
+    let (app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    let draft = request(
+        &document_id,
+        &generation,
+        1,
+        &base_fingerprint,
+        "replace completed",
+    );
+    service.store_recovery_snapshot(draft.clone()).unwrap();
+    service
+        .save_document_interrupted_after_replace_before_phase_for_test(draft)
+        .unwrap();
+    drop(service);
+
+    let reopened = LibraryService::open(app_data.path()).unwrap();
+    assert_eq!(
+        fs::read(root.path().join("Alpha/draft.md")).unwrap(),
+        b"replace completed"
+    );
+    assert_eq!(reopened.pending_operation_count().unwrap(), 0);
+    assert!(reopened
         .load_recovery_snapshot(&document_id)
         .unwrap()
         .is_none());
