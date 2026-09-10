@@ -17,7 +17,7 @@ use crate::infrastructure::database::{Database, DatabaseOpen};
 use crate::infrastructure::filesystem::{
     case_aware_rename, file_identity, fingerprint, probe_candidate, recycle_file,
     rename_no_replace, resolve_existing, resolve_new, scan, sync_parent, write_durable,
-    CandidateRootProbe, ScannedDocument, ScannedProject,
+    CandidateRootProbe, ScannedProject,
 };
 use crate::infrastructure::watcher::{LibraryWatcher, WatcherHints};
 
@@ -1511,13 +1511,14 @@ fn update_project_metadata(
         let mut statement = transaction
             .prepare("SELECT id, relative_path FROM documents WHERE project_id = ?1")
             .map_err(LibraryError::database)?;
-        statement
+        let rows = statement
             .query_map([project_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(LibraryError::database)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(LibraryError::database)?
+            .map_err(LibraryError::database)?;
+        rows
     };
     for (document_id, old_path) in paths {
         validate_relative_path(&old_path, 2)?;

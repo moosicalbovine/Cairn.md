@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(not(any(windows, unix)))]
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
@@ -64,31 +65,35 @@ pub fn probe_candidate(candidate: &Path) -> Result<CandidateRootProbe, LibraryEr
     let mut can_rename = false;
     let mut can_recover = false;
 
-    let result = (|| -> std::io::Result<()> {
+    let result = (|| -> Result<(), LibraryError> {
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(&source)?;
+            .open(&source)
+            .map_err(LibraryError::io)?;
         can_create = true;
-        file.write_all(b"cairn capability probe")?;
-        file.sync_all()?;
+        file.write_all(b"cairn capability probe")
+            .map_err(LibraryError::io)?;
+        file.sync_all().map_err(LibraryError::io)?;
         can_flush = true;
 
         OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(&collision)?
-            .sync_all()?;
+            .open(&collision)
+            .map_err(LibraryError::io)?
+            .sync_all()
+            .map_err(LibraryError::io)?;
         if OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&collision)
             .is_err()
         {
-            rename_no_replace(&source, &target)?;
+            rename_no_replace(&source, &target).map_err(LibraryError::io)?;
             can_rename = true;
         }
-        fs::rename(&target, &source)?;
+        fs::rename(&target, &source).map_err(LibraryError::io)?;
         let recycled = recycle_file(&source)?;
         can_recover = !source.exists();
         if let Some(path) = recycled {
