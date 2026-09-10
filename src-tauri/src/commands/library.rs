@@ -4,8 +4,8 @@ use std::sync::{Mutex, MutexGuard};
 use tauri::State;
 
 use crate::domain::library::{
-    DeletedDocument, DocumentSnapshot, LibraryError, LibraryService, LibrarySnapshot,
-    ProjectSnapshot, RelinkPreview,
+    DeletedDocument, DocumentContent, DocumentSnapshot, LibraryError, LibraryService,
+    LibrarySnapshot, ProjectSnapshot, RelinkPreview,
 };
 use crate::infrastructure::filesystem::CandidateRootProbe;
 
@@ -92,6 +92,14 @@ pub fn create_document(
     name: String,
 ) -> Result<DocumentSnapshot, LibraryError> {
     service(&state)?.create_document(&project_id, &name)
+}
+
+#[tauri::command]
+pub fn read_document(
+    state: State<'_, LibraryState>,
+    document_id: String,
+) -> Result<DocumentContent, LibraryError> {
+    service(&state)?.read_document(&document_id)
 }
 
 #[tauri::command]

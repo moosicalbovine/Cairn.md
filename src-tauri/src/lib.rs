@@ -69,6 +69,7 @@ pub fn run() {
             commands::library::create_project,
             commands::library::rename_project,
             commands::library::create_document,
+            commands::library::read_document,
             commands::library::rename_document,
             commands::library::move_document,
             commands::library::delete_document,

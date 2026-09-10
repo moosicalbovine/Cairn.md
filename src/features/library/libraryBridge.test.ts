@@ -5,8 +5,10 @@ import {
   confirmLibraryRelink,
   createProject,
   loadLibraryIndex,
+  parseDocumentContent,
   parseLibrarySnapshot,
   previewLibraryRelink,
+  readDocument,
   watchLibraryReconciliation,
   type LibrarySnapshot,
   type RelinkPreview,
@@ -126,6 +128,43 @@ describe("library command bridge", () => {
     await createProject("Alpha");
 
     expect(invoke).toHaveBeenCalledWith("create_project", { name: "Alpha" });
+  });
+
+  it("opens verified Markdown bytes through the document boundary", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      document: {
+        id: "document-1",
+        relativePath: "Alpha/note.md",
+        sourcePath: null,
+        importedAt: null,
+        diskFingerprint: "sha256:abc",
+      },
+      bytes: [35, 32, 78, 111, 116, 101],
+      baseFingerprint: "sha256:abc",
+    });
+
+    const content = await readDocument("document-1");
+
+    expect([...content.bytes]).toEqual([35, 32, 78, 111, 116, 101]);
+    expect(invoke).toHaveBeenCalledWith("read_document", {
+      documentId: "document-1",
+    });
+  });
+
+  it("rejects invalid byte payloads from the native boundary", () => {
+    expect(() =>
+      parseDocumentContent({
+        document: {
+          id: "document-1",
+          relativePath: "Alpha/note.md",
+          sourcePath: null,
+          importedAt: null,
+          diskFingerprint: "sha256:abc",
+        },
+        bytes: [256],
+        baseFingerprint: "sha256:abc",
+      }),
+    ).toThrow("Invalid document content");
   });
 
   it("rejects malformed snapshots instead of trusting IPC data", () => {

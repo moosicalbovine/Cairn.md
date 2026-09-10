@@ -17,6 +17,12 @@ export type DocumentSnapshot = Readonly<{
   diskFingerprint: string;
 }>;
 
+export type DocumentContent = Readonly<{
+  document: DocumentSnapshot;
+  bytes: Uint8Array;
+  baseFingerprint: string;
+}>;
+
 export type ProjectSnapshot = Readonly<{
   id: string;
   relativePath: string;
@@ -91,6 +97,24 @@ export function parseDocumentSnapshot(value: unknown): DocumentSnapshot {
     sourcePath: value.sourcePath,
     importedAt: value.importedAt,
     diskFingerprint: value.diskFingerprint,
+  };
+}
+
+export function parseDocumentContent(value: unknown): DocumentContent {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.bytes) ||
+    !value.bytes.every(
+      (byte) => Number.isSafeInteger(byte) && (byte as number) >= 0 && (byte as number) <= 255,
+    ) ||
+    typeof value.baseFingerprint !== "string"
+  ) {
+    throw new Error("Invalid document content");
+  }
+  return {
+    document: parseDocumentSnapshot(value.document),
+    bytes: Uint8Array.from(value.bytes as number[]),
+    baseFingerprint: value.baseFingerprint,
   };
 }
 
@@ -216,6 +240,12 @@ export function watchLibraryReconciliation(
 
 export async function createProject(name: string): Promise<ProjectSnapshot> {
   return parseProject(await invoke<unknown>("create_project", { name }));
+}
+
+export async function readDocument(documentId: string): Promise<DocumentContent> {
+  return parseDocumentContent(
+    await invoke<unknown>("read_document", { documentId }),
+  );
 }
 
 export async function probeLibraryRoot(candidatePath: string): Promise<CandidateRootProbe> {

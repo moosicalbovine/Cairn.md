@@ -56,6 +56,10 @@ fn imports_case_insensitive_markdown_with_exact_provenance() {
         source_modified,
         "import must not touch the source timestamp"
     );
+    let content = service.read_document(&imported.id).unwrap();
+    assert_eq!(content.document, imported);
+    assert_eq!(content.bytes, b"# Proposal\r\n");
+    assert_eq!(content.base_fingerprint, content.document.disk_fingerprint);
 }
 
 #[test]

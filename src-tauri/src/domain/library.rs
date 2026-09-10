@@ -104,6 +104,14 @@ pub struct DocumentSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DocumentContent {
+    pub document: DocumentSnapshot,
+    pub bytes: Vec<u8>,
+    pub base_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectSnapshot {
     pub id: String,
     pub relative_path: String,
@@ -627,6 +635,21 @@ impl LibraryService {
     ) -> Result<DocumentSnapshot, LibraryError> {
         self.create_document_through_phase(project_id, name, JournalPhase::CleanupComplete, false)?
             .ok_or_else(|| LibraryError::new("journal_incomplete", "Document was not committed"))
+    }
+
+    pub fn read_document(&mut self, document_id: &str) -> Result<DocumentContent, LibraryError> {
+        let binding = self.required_binding()?;
+        self.verify_active_root(&binding)?;
+        let document = self.document_by_id(document_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
+        let path = self.verified_document_path(&binding, document_id, &document.relative_path)?;
+        let bytes = fs::read(&path).map_err(LibraryError::io)?;
+        let base_fingerprint = format!("sha256:{:x}", Sha256::digest(&bytes));
+        Ok(DocumentContent {
+            document,
+            bytes,
+            base_fingerprint,
+        })
     }
 
     pub fn import_document(
