@@ -806,6 +806,65 @@ impl LibraryService {
         Ok(removed == 1)
     }
 
+    pub fn reload_document_from_disk(
+        &mut self,
+        document_id: &str,
+        session_generation: Option<&str>,
+    ) -> Result<DocumentContent, LibraryError> {
+        let binding = self.required_writable_binding()?;
+        let document = self.document_by_id(document_id)?;
+        validate_relative_path(&document.relative_path, 2)?;
+        let project = self.project_for_document(document_id)?;
+        self.verified_project_path(&binding, &project.id, &project.relative_path)?;
+        let path = resolve_existing(&binding.root_path, &document.relative_path)?;
+        let bytes = fs::read(&path).map_err(LibraryError::io)?;
+        let disk_fingerprint = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = file_identity(&path)?;
+        let transaction = self
+            .database_mut()?
+            .connection_mut()
+            .transaction()
+            .map_err(LibraryError::database)?;
+        let pending_generation = transaction
+            .query_row(
+                "SELECT session_generation FROM recovery_snapshots WHERE document_id = ?1",
+                [document_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(LibraryError::database)?;
+        if pending_generation.as_deref() != session_generation {
+            return Err(LibraryError::new(
+                "recovery_mismatch",
+                "The pending recovery generation changed before reload",
+            ));
+        }
+        transaction.execute(
+            "UPDATE documents SET disk_fingerprint = ?1, disk_revision = 0, file_identity = ?2, updated_at = ?3 WHERE id = ?4",
+            params![&disk_fingerprint, identity, now_millis(), document_id],
+        ).map_err(LibraryError::database)?;
+        transaction
+            .execute(
+                "DELETE FROM external_conflicts WHERE document_id = ?1",
+                [document_id],
+            )
+            .map_err(LibraryError::database)?;
+        if let Some(generation) = session_generation {
+            transaction
+                .execute(
+                    "DELETE FROM recovery_snapshots WHERE document_id = ?1 AND session_generation = ?2",
+                    params![document_id, generation],
+                )
+                .map_err(LibraryError::database)?;
+        }
+        transaction.commit().map_err(LibraryError::database)?;
+        Ok(DocumentContent {
+            document: self.document_by_id(document_id)?,
+            bytes,
+            base_fingerprint: disk_fingerprint,
+        })
+    }
+
     pub fn save_document(
         &mut self,
         request: RecoverySnapshotRequest,
@@ -1035,6 +1094,7 @@ impl LibraryService {
         let binding = self.required_writable_binding()?;
         let project = self.project_for_document(document_id)?;
         let document = self.document_by_id(document_id)?;
+        self.ensure_project_for_recovery_copy(&binding, &project)?;
         let original_name = document
             .relative_path
             .split('/')
@@ -1077,6 +1137,38 @@ impl LibraryService {
             "collision_limit",
             "No recovered document name is available",
         ))
+    }
+
+    fn ensure_project_for_recovery_copy(
+        &mut self,
+        binding: &LibraryBinding,
+        project: &ProjectSnapshot,
+    ) -> Result<(), LibraryError> {
+        validate_relative_path(&project.relative_path, 1)?;
+        let candidate = resolve_new(&binding.root_path, &project.relative_path)?;
+        if !candidate.exists() {
+            match fs::create_dir(&candidate) {
+                Ok(()) => sync_parent(&candidate)?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(LibraryError::io(error)),
+            }
+        }
+        let path = resolve_existing(&binding.root_path, &project.relative_path)?;
+        if !path.is_dir() {
+            return Err(LibraryError::new(
+                "invalid_project",
+                "The recovery project path is not a directory",
+            ));
+        }
+        let identity = file_identity(&path)?;
+        self.database_mut()?
+            .connection_mut()
+            .execute(
+                "UPDATE projects SET file_identity = ?1, updated_at = ?2 WHERE id = ?3",
+                params![identity, now_millis(), &project.id],
+            )
+            .map_err(LibraryError::database)?;
+        Ok(())
     }
 
     fn record_external_conflict(
@@ -3204,6 +3296,28 @@ fn load_existing_documents(
     Ok(rows)
 }
 
+fn load_recovery_ownership(
+    transaction: &rusqlite::Transaction<'_>,
+    library_id: &str,
+) -> Result<(HashSet<String>, HashSet<String>), LibraryError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT recovery.document_id, documents.project_id FROM recovery_snapshots recovery JOIN documents ON documents.id = recovery.document_id WHERE documents.library_id = ?1",
+        )
+        .map_err(LibraryError::database)?;
+    let rows = statement
+        .query_map([library_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(LibraryError::database)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(LibraryError::database)?;
+    Ok((
+        rows.iter().map(|(document, _)| document.clone()).collect(),
+        rows.into_iter().map(|(_, project)| project).collect(),
+    ))
+}
+
 fn reconcile_transaction(
     transaction: &rusqlite::Transaction<'_>,
     library_id: &str,
@@ -3214,6 +3328,7 @@ fn reconcile_transaction(
 ) -> Result<(), LibraryError> {
     let projects = load_existing_projects(transaction, library_id)?;
     let documents = load_existing_documents(transaction, library_id)?;
+    let (recovery_documents, recovery_projects) = load_recovery_ownership(transaction, library_id)?;
     let mut used_projects = HashSet::new();
     let mut project_ids = vec![None; scanned.len()];
 
@@ -3243,6 +3358,7 @@ fn reconcile_transaction(
             !used_projects.contains(&row.id)
                 && row.path_key == key
                 && (allow_confirmed_path_rebind
+                    || recovery_projects.contains(&row.id)
                     || identities_compatible(
                         row.file_identity.as_ref(),
                         candidate.file_identity.as_ref(),
@@ -3385,6 +3501,15 @@ fn reconcile_transaction(
     }
     for row in &documents {
         if !used_documents.contains(&row.id) {
+            if recovery_documents.contains(&row.id) {
+                transaction
+                    .execute(
+                        "UPDATE documents SET path_key = ?1 WHERE id = ?2",
+                        params![&row.path_key, &row.id],
+                    )
+                    .map_err(LibraryError::database)?;
+                continue;
+            }
             transaction
                 .execute("DELETE FROM documents WHERE id = ?1", [&row.id])
                 .map_err(LibraryError::database)?;
@@ -3392,6 +3517,15 @@ fn reconcile_transaction(
     }
     for row in &projects {
         if !used_projects.contains(&row.id) {
+            if recovery_projects.contains(&row.id) {
+                transaction
+                    .execute(
+                        "UPDATE projects SET path_key = ?1 WHERE id = ?2",
+                        params![&row.path_key, &row.id],
+                    )
+                    .map_err(LibraryError::database)?;
+                continue;
+            }
             transaction
                 .execute("DELETE FROM projects WHERE id = ?1", [&row.id])
                 .map_err(LibraryError::database)?;

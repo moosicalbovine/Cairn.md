@@ -220,6 +220,110 @@ fn deleting_external_file_during_resolution_does_not_lose_the_local_draft() {
 }
 
 #[test]
+fn reconciliation_preserves_recovery_when_the_external_project_disappears() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    service
+        .store_recovery_snapshot(request(
+            &document_id,
+            &generation,
+            1,
+            &base_fingerprint,
+            "local survives reconciliation",
+        ))
+        .unwrap();
+    fs::remove_dir_all(root.path().join("Alpha")).unwrap();
+
+    let snapshot = service.reconcile().unwrap();
+
+    let retained = snapshot
+        .projects
+        .iter()
+        .flat_map(|project| &project.documents)
+        .find(|document| document.id == document_id)
+        .expect("document metadata remains reachable while recovery is pending");
+    assert_eq!(retained.relative_path, "Alpha/draft.md");
+    let recovery = service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .expect("recovery survives watcher reconciliation");
+    assert_eq!(recovery.bytes, b"local survives reconciliation");
+
+    let recovered_copy = service
+        .save_recovery_copy(&document_id, &generation)
+        .unwrap();
+    assert_eq!(
+        fs::read(root.path().join(recovered_copy.relative_path)).unwrap(),
+        b"local survives reconciliation"
+    );
+}
+
+#[test]
+fn reconciliation_rebinds_a_recreated_project_without_orphaning_recovery() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    service
+        .store_recovery_snapshot(request(
+            &document_id,
+            &generation,
+            1,
+            &base_fingerprint,
+            "local survives replacement",
+        ))
+        .unwrap();
+    fs::remove_dir_all(root.path().join("Alpha")).unwrap();
+    fs::create_dir(root.path().join("Alpha")).unwrap();
+    fs::write(root.path().join("Alpha/external.md"), "external").unwrap();
+
+    let snapshot = service.reconcile().unwrap();
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].relative_path, "Alpha");
+    assert!(snapshot.projects[0]
+        .documents
+        .iter()
+        .any(|document| document.id == document_id));
+    assert!(service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn explicit_reload_accepts_the_latest_external_bytes_and_clears_recovery() {
+    let (_app_data, root, mut service, document_id, base_fingerprint) = bound_document();
+    let generation = Uuid::new_v4().to_string();
+    let draft = request(
+        &document_id,
+        &generation,
+        1,
+        &base_fingerprint,
+        "local draft",
+    );
+    service.store_recovery_snapshot(draft.clone()).unwrap();
+    fs::write(root.path().join("Alpha/draft.md"), "external one").unwrap();
+    assert_eq!(
+        service.save_document(draft).unwrap().status,
+        SaveStatus::Conflict
+    );
+    fs::write(root.path().join("Alpha/draft.md"), "external two").unwrap();
+
+    let reloaded = service
+        .reload_document_from_disk(&document_id, Some(&generation))
+        .unwrap();
+
+    assert_eq!(reloaded.bytes, b"external two");
+    assert_eq!(
+        reloaded.base_fingerprint,
+        reloaded.document.disk_fingerprint
+    );
+    assert!(service
+        .load_recovery_snapshot(&document_id)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn save_journal_replays_every_recorded_phase_and_is_idempotent() {
     for phase in [
         JournalPhase::IntentRecorded,

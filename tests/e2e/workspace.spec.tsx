@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { Workspace } from "../../src/features/library/components/Workspace";
 import type { LibrarySnapshot } from "../../src/lib/tauri/library";
 
+vi.mock("../../src/lib/tauri/library", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/tauri/library")>()),
+  watchLibraryReconciliation: vi.fn(() => () => undefined),
+}));
 vi.mock("../../src/features/library/tracked-folders/trackedFolderBrowser", () => ({
   addChosenTrackedFolder: vi.fn(),
   browseTrackedFolder: vi.fn(async () => []),

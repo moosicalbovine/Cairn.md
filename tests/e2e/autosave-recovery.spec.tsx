@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   saveDocument: vi.fn(),
   storeRecoverySnapshot: vi.fn(),
   saveRecoveryCopy: vi.fn(),
+  reloadDocumentFromDisk: vi.fn(),
 }));
 
 vi.mock("../../src/lib/tauri/library", async (importOriginal) => ({
@@ -25,6 +26,7 @@ vi.mock("../../src/lib/tauri/persistence", async (importOriginal) => ({
   saveDocument: mocks.saveDocument,
   storeRecoverySnapshot: mocks.storeRecoverySnapshot,
   saveRecoveryCopy: mocks.saveRecoveryCopy,
+  reloadDocumentFromDisk: mocks.reloadDocumentFromDisk,
 }));
 vi.mock("../../src/features/editor/components/VisualDocumentEditor", () => ({
   VisualDocumentEditor: ({ visual }: { visual: { projection: { revision: number } } }) => (
@@ -108,6 +110,61 @@ describe("autosave recovery workspace", () => {
 
     await waitFor(() => expect(onRecoveryCopySaved).toHaveBeenCalledWith(copy));
     expect(mocks.discardRecoverySnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps recovery accessible when the external file is missing", async () => {
+    const pending = recovery("Conflict");
+    mocks.loadRecoverySnapshot.mockResolvedValue(pending);
+    mocks.readDocument.mockRejectedValue(new Error("The document is missing"));
+
+    render(<DocumentEditor document={document} />);
+
+    expect(await screen.findByText(/file is unavailable/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save as recovered copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep recovered changes" })).not.toBeInTheDocument();
+  });
+
+  it("reloads a reconciled external edit when the active session is clean", async () => {
+    mocks.readDocument.mockResolvedValueOnce(diskContent).mockResolvedValueOnce({
+      ...diskContent,
+      bytes: new TextEncoder().encode("external update"),
+      baseFingerprint: "disk-external",
+    });
+    mocks.loadRecoverySnapshot.mockResolvedValue(null);
+    const { rerender } = render(<DocumentEditor document={document} />);
+    expect(await screen.findByTestId("visual-editor")).toBeInTheDocument();
+
+    rerender(
+      <DocumentEditor
+        document={{ ...document, diskFingerprint: "disk-external" }}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.readDocument).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+  });
+
+  it("reloads the latest external bytes only after explicit conflict resolution", async () => {
+    const pending = recovery("Conflict");
+    mocks.readDocument.mockResolvedValue(diskContent);
+    mocks.loadRecoverySnapshot.mockResolvedValue(pending);
+    mocks.reloadDocumentFromDisk.mockResolvedValue({
+      ...diskContent,
+      bytes: new TextEncoder().encode("latest external"),
+      baseFingerprint: "latest-external-hash",
+    });
+    render(<DocumentEditor document={document} />);
+    expect(await screen.findByText(/both versions are preserved/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard and reload file" }));
+
+    await waitFor(() =>
+      expect(mocks.reloadDocumentFromDisk).toHaveBeenCalledWith(
+        document.id,
+        pending.sessionGeneration,
+      ),
+    );
+    expect(await screen.findByTestId("visual-editor")).toBeInTheDocument();
   });
 
   it("clears a snapshot whose intended bytes are already on disk", async () => {

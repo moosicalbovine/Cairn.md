@@ -83,6 +83,7 @@ pub fn run() {
             commands::persistence::discard_recovery_snapshot,
             commands::persistence::save_document,
             commands::persistence::save_recovery_copy,
+            commands::persistence::reload_document_from_disk,
         ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");

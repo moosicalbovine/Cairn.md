@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import { parseDocumentSnapshot, type DocumentSnapshot } from "./library";
+import {
+  parseDocumentContent,
+  parseDocumentSnapshot,
+  type DocumentContent,
+  type DocumentSnapshot,
+} from "./library";
 
 export type RecoveryLifecycle = "Draft" | "Saving" | "Recovered" | "Conflict";
 
@@ -142,6 +147,18 @@ export async function saveRecoveryCopy(
 ): Promise<DocumentSnapshot> {
   return parseDocumentSnapshot(
     await invoke<unknown>("save_recovery_copy", {
+      documentId,
+      sessionGeneration,
+    }),
+  );
+}
+
+export async function reloadDocumentFromDisk(
+  documentId: string,
+  sessionGeneration: string | null = null,
+): Promise<DocumentContent> {
+  return parseDocumentContent(
+    await invoke<unknown>("reload_document_from_disk", {
       documentId,
       sessionGeneration,
     }),

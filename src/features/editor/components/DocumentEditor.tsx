@@ -8,6 +8,7 @@ import {
 import {
   discardRecoverySnapshot,
   loadRecoverySnapshot,
+  reloadDocumentFromDisk,
   saveRecoveryCopy,
   type RecoverySnapshot,
 } from "../../../lib/tauri/persistence";
@@ -51,12 +52,15 @@ export function DocumentEditor({
   const [recovery, setRecovery] = useState<RecoverySnapshot | null>(null);
   const editorRef = useRef<EditorSession | null>(null);
   const autosaveRef = useRef<AutosaveController | null>(null);
+  const sessionEpochRef = useRef(0);
 
   const startSession = useCallback((
     bytes: Uint8Array,
     baseFingerprint: string,
     recovered?: RecoverySnapshot,
   ) => {
+    const sessionEpoch = sessionEpochRef.current + 1;
+    sessionEpochRef.current = sessionEpoch;
     const opened = recovered
       ? EditorSession.openRecovered(bytes, recovered.revision)
       : EditorSession.open(bytes);
@@ -68,6 +72,26 @@ export function DocumentEditor({
         baseFingerprint,
         ...(recovered ? { initialSnapshot: recovered } : {}),
         onProgress: setPersistence,
+        onConflict: () => {
+          void loadRecoverySnapshot(document.id).then(
+            (pending) => {
+              if (!pending || sessionEpochRef.current !== sessionEpoch) return;
+              sessionEpochRef.current += 1;
+              const controller = autosaveRef.current;
+              autosaveRef.current = null;
+              void controller?.dispose();
+              editorRef.current?.dispose();
+              editorRef.current = null;
+              setEditor(null);
+              setRecovery(pending);
+            },
+            (reason) => {
+              if (sessionEpochRef.current === sessionEpoch) {
+                setError(reason instanceof Error ? reason.message : "Recovery could not be loaded.");
+              }
+            },
+          );
+        },
       });
     }
     setEditor(opened);
@@ -78,8 +102,23 @@ export function DocumentEditor({
     let active = true;
     void (async () => {
       try {
-        const content = await readDocument(document.id);
         let pending = await loadRecoverySnapshot(document.id);
+        if (!active) return;
+        let content: DocumentContent;
+        try {
+          content = await readDocument(document.id);
+        } catch (reason) {
+          if (!active) return;
+          if (!pending) throw reason;
+          setRecovery(pending);
+          setPersistence({
+            label: "Recovered",
+            currentRevision: pending.revision,
+            durableSnapshotRevision: pending.revision,
+            diskRevision: 0,
+          });
+          return;
+        }
         if (!active) return;
         if (pending?.intendedDiskHash === content.baseFingerprint) {
           await discardRecoverySnapshot(document.id, pending.sessionGeneration);
@@ -104,6 +143,7 @@ export function DocumentEditor({
     })();
     return () => {
       active = false;
+      sessionEpochRef.current += 1;
       const autosave = autosaveRef.current;
       autosaveRef.current = null;
       void autosave?.dispose();
@@ -111,6 +151,48 @@ export function DocumentEditor({
       editorRef.current = null;
     };
   }, [document.id, startSession]);
+
+  useEffect(() => {
+    const controller = autosaveRef.current;
+    if (
+      !editor ||
+      recovery ||
+      !diskContent ||
+      document.diskFingerprint === diskContent.baseFingerprint ||
+      document.diskFingerprint === controller?.diskFingerprint ||
+      controller?.progress.label !== "Saved"
+    ) {
+      return;
+    }
+
+    let active = true;
+    void readDocument(document.id).then(
+      (content) => {
+        if (
+          !active ||
+          autosaveRef.current !== controller ||
+          controller.progress.label !== "Saved"
+        ) {
+          return;
+        }
+        const previousController = autosaveRef.current;
+        autosaveRef.current = null;
+        void previousController?.dispose();
+        editorRef.current?.dispose();
+        editorRef.current = null;
+        setDiskContent(content);
+        startSession(content.bytes, content.baseFingerprint);
+      },
+      (reason) => {
+        if (active) {
+          setError(reason instanceof Error ? reason.message : "External changes could not be loaded.");
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [diskContent, document.diskFingerprint, document.id, editor, recovery, startSession]);
 
   function switchMode(next: EditorMode) {
     if (!editor || (readOnly && next === "visual")) return;
@@ -126,13 +208,17 @@ export function DocumentEditor({
   }
 
   async function discardRecovery() {
-    if (!recovery || !diskContent) return;
+    if (!recovery) return;
     setError(null);
     try {
-      await discardRecoverySnapshot(document.id, recovery.sessionGeneration);
+      const content = await reloadDocumentFromDisk(
+        document.id,
+        recovery.sessionGeneration,
+      );
       setRecovery(null);
       setPersistence(null);
-      startSession(diskContent.bytes, diskContent.baseFingerprint);
+      setDiskContent(content);
+      startSession(content.bytes, content.baseFingerprint);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Recovery could not be discarded.");
     }
@@ -143,6 +229,7 @@ export function DocumentEditor({
     setError(null);
     try {
       const copy = await saveRecoveryCopy(document.id, recovery.sessionGeneration);
+      setRecovery(null);
       onRecoveryCopySaved?.(copy);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The recovered copy could not be saved.");
@@ -181,7 +268,9 @@ export function DocumentEditor({
           <p>
             {recoveryCanResume
               ? "Cairn.md recovered changes that had not reached the Markdown file."
-              : "The Markdown file changed outside Cairn.md. Both versions are preserved."}
+              : diskContent
+                ? "The Markdown file changed outside Cairn.md. Both versions are preserved."
+                : "The Markdown file is unavailable. Your recovered version is preserved."}
           </p>
           <pre>{new TextDecoder().decode(recovery.bytes)}</pre>
           <div>

@@ -9,6 +9,7 @@ import {
   moveDocument,
   renameDocument,
   renameProject,
+  watchLibraryReconciliation,
   type DocumentSnapshot,
   type LibrarySnapshot,
   type ProjectSnapshot,
@@ -70,6 +71,21 @@ export function Workspace({
   const selectedDocument =
     selectedProject?.documents.find((document) => document.id === selectedDocumentId) ?? null;
   const canMutate = snapshot.mode === "writable";
+
+  useEffect(
+    () =>
+      watchLibraryReconciliation(
+        setSnapshot,
+        (reason) => {
+          setNotice(
+            reason instanceof Error
+              ? reason.message
+              : "The library could not refresh external changes.",
+          );
+        },
+      ),
+    [],
+  );
 
   useEffect(() => {
     let active = true;

@@ -30,6 +30,7 @@ type AutosaveOptions = Readonly<{
   delayMs?: number;
   port?: PersistencePort;
   initialSnapshot?: RecoverySnapshot;
+  onConflict?(): void;
 }>;
 
 const defaultPort: PersistencePort = { storeRecoverySnapshot, saveDocument };
@@ -41,6 +42,7 @@ export class AutosaveController {
   readonly #delayMs: number;
   readonly #port: PersistencePort;
   readonly #onProgress: (progress: PersistenceProgress) => void;
+  readonly #onConflict: (() => void) | undefined;
   readonly #unsubscribe: () => void;
 
   #baseFingerprint: string;
@@ -65,6 +67,7 @@ export class AutosaveController {
     this.#delayMs = options.delayMs ?? 350;
     this.#port = options.port ?? defaultPort;
     this.#onProgress = options.onProgress;
+    this.#onConflict = options.onConflict;
     this.#durableSnapshot = options.initialSnapshot ?? null;
     this.#recovered = options.initialSnapshot !== undefined;
     this.#unsubscribe = this.#session.subscribe(() => this.#acknowledgeEdit());
@@ -73,6 +76,10 @@ export class AutosaveController {
 
   get progress(): PersistenceProgress {
     return this.#progress(this.#label());
+  }
+
+  get diskFingerprint(): string {
+    return this.#baseFingerprint;
   }
 
   retry(): void {
@@ -181,6 +188,7 @@ export class AutosaveController {
         if (result.status === "conflict") {
           this.#failed = true;
           this.#emit("Save failed");
+          if (!this.#disposed) this.#onConflict?.();
           return;
         }
         if (result.revision >= this.#diskRevision) {

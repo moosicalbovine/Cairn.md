@@ -151,6 +151,36 @@ describe("AutosaveController", () => {
     await controller.dispose();
   });
 
+  it("stops and reports when protected save detects an external conflict", async () => {
+    vi.useFakeTimers();
+    const onConflict = vi.fn();
+    const labels: string[] = [];
+    const session = MarkdownSession.fromSource("");
+    const controller = new AutosaveController({
+      documentId: "document-1",
+      session,
+      baseFingerprint: "base-0",
+      generation: "generation-1",
+      onProgress: (value) => labels.push(value.label),
+      onConflict,
+      port: {
+        storeRecoverySnapshot: async (request) => snapshotOf(request),
+        saveDocument: async (request) => ({
+          status: "conflict",
+          revision: request.revision,
+          diskFingerprint: "external-hash",
+        }),
+      },
+    });
+
+    session.replaceSource("local", 0);
+    await vi.runAllTimersAsync();
+
+    expect(labels.at(-1)).toBe("Save failed");
+    expect(onConflict).toHaveBeenCalledOnce();
+    await controller.dispose();
+  });
+
   it("flushes acknowledged text to recovery before disposal", async () => {
     vi.useFakeTimers();
     const storeRecoverySnapshot = vi.fn(async (request) => snapshotOf(request));
