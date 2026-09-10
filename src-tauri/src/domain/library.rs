@@ -254,8 +254,8 @@ impl LibraryService {
         let app_data_dir = app_data_dir.to_path_buf();
         let (database, mode, read_only_reason) = match Database::open(&app_data_dir)? {
             DatabaseOpen::Healthy(database) => (Some(database), LibraryMode::Writable, None),
-            DatabaseOpen::Damaged { reason, .. } => {
-                log::error!("Cairn.md metadata unavailable: {reason}");
+            DatabaseOpen::Damaged { .. } => {
+                log::error!("Cairn.md metadata unavailable: metadata_damaged");
                 (
                     None,
                     LibraryMode::ReadOnly,
@@ -282,13 +282,16 @@ impl LibraryService {
                                         == Some(binding.root_identity.as_str()) =>
                             {
                                 if let Err(error) = service.replay_pending_operations() {
-                                    log::error!("Cairn.md journal replay failed: {error}");
+                                    log::error!("Cairn.md journal replay failed: {}", error.code());
                                     service.enter_read_only("journal_recovery_failed");
                                     service.preserve_metadata_evidence();
                                     return Ok(service);
                                 }
                                 if let Err(error) = service.restart_watcher(&binding.root_path) {
-                                    log::error!("Cairn.md watcher startup failed: {error}");
+                                    log::error!(
+                                        "Cairn.md watcher startup failed: {}",
+                                        error.code()
+                                    );
                                     service.enter_read_only("watcher_unavailable");
                                     service.preserve_metadata_evidence();
                                 }
@@ -304,7 +307,7 @@ impl LibraryService {
                 },
                 Ok(None) => {}
                 Err(error) => {
-                    log::error!("Cairn.md binding read failed: {error}");
+                    log::error!("Cairn.md binding read failed: {}", error.code());
                     service.enter_read_only("metadata_damaged");
                     service.preserve_metadata_evidence();
                     service.database = None;
