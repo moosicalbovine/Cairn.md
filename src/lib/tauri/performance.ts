@@ -5,16 +5,38 @@ export type BrowserPerformanceReport = Readonly<{
   inputLatencyMs: readonly number[];
 }>;
 
+export type PerformanceFixturePaths = Readonly<{
+  libraryRoot: string;
+  trackedRoot: string;
+}>;
+
 export function isPerformanceMode(): Promise<boolean> {
   return invoke<boolean>("performance_mode");
 }
 
-export async function getPerformanceScenario(): Promise<"full" | "idle"> {
+export async function getPerformanceScenario(): Promise<"full" | "idle" | "workspace"> {
   const value = await invoke<unknown>("performance_scenario");
-  if (value !== "full" && value !== "idle") {
+  if (value !== "full" && value !== "idle" && value !== "workspace") {
     throw new Error("Invalid performance scenario");
   }
   return value;
+}
+
+export async function getPerformanceFixturePaths(): Promise<PerformanceFixturePaths> {
+  const value = await invoke<unknown>("performance_fixture_paths");
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("libraryRoot" in value) ||
+    !("trackedRoot" in value) ||
+    typeof value.libraryRoot !== "string" ||
+    value.libraryRoot.length === 0 ||
+    typeof value.trackedRoot !== "string" ||
+    value.trackedRoot.length === 0
+  ) {
+    throw new Error("Invalid performance fixture paths");
+  }
+  return { libraryRoot: value.libraryRoot, trackedRoot: value.trackedRoot };
 }
 
 export function markPerformanceReady(): Promise<void> {

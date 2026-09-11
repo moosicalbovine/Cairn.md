@@ -1,18 +1,25 @@
 param(
     [string]$BinaryPath = "src-tauri\target\debug\cairn-md.exe",
     [ValidateSet('workspace', 'recovery')]
-    [string]$Scenario = 'workspace'
+    [string]$Scenario = 'workspace',
+    [switch]$InstalledRelease
 )
 
 $ErrorActionPreference = 'Stop'
 $port = 4444
 $elementKey = 'element-6066-11e4-a52e-4f735466cecf'
-$webviewIdentifier = 'io.github.moosicalbovine.cairn-md-webdriver'
+$webviewIdentifier = if ($InstalledRelease) {
+    'io.github.moosicalbovine.cairn-md'
+} else {
+    'io.github.moosicalbovine.cairn-md-webdriver'
+}
 $resolvedBinary = (Resolve-Path -LiteralPath $BinaryPath).Path
 $driverCommand = Get-Command 'msedgedriver' -ErrorAction Stop
 $testBase = Join-Path ([IO.Path]::GetTempPath()) ("cairn-webdriver-" + [Guid]::NewGuid().ToString('N'))
 $appData = Join-Path $testBase 'app-data'
 $libraryRoot = Join-Path $testBase 'library'
+$trackedRoot = Join-Path $testBase 'tracked-source'
+$performanceReport = Join-Path $testBase 'installed-workspace.json'
 # Tauri forces an unconfigured WebView data directory to LOCALAPPDATA/<identifier>.
 # Keep this identifier aligned with tauri.webdriver.conf.json so EdgeDriver can attach.
 $webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
@@ -257,12 +264,26 @@ function Wait-ElementText {
 }
 
 try {
-    New-Item -ItemType Directory -Path $appData, $libraryRoot -Force | Out-Null
+    if ($InstalledRelease -and $Scenario -ne 'workspace') {
+        throw 'Installed release validation only supports the workspace scenario.'
+    }
+    New-Item -ItemType Directory -Path $appData, $libraryRoot, $trackedRoot -Force | Out-Null
+    $trackedFile = Join-Path $trackedRoot 'tracked-proof.md'
+    $trackedOriginal = '# Original tracked file remains unchanged.'
+    Set-Content -LiteralPath $trackedFile -Value $trackedOriginal -NoNewline
     Clear-WebViewData
-    $env:CAIRN_WEBDRIVER_MODE = '1'
     $env:CAIRN_APP_DATA_DIR = $appData
-    $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
     $env:TAURI_WEBVIEW_AUTOMATION = 'true'
+    if ($InstalledRelease) {
+        $env:CAIRN_PERF_MODE = '1'
+        $env:CAIRN_PERF_SCENARIO = 'workspace'
+        $env:CAIRN_PERF_OUTPUT = $performanceReport
+        $env:CAIRN_PERF_LIBRARY_ROOT = $libraryRoot
+        $env:CAIRN_PERF_TRACKED_ROOT = $trackedRoot
+    } else {
+        $env:CAIRN_WEBDRIVER_MODE = '1'
+        $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
+    }
     if ($Scenario -eq 'recovery') {
         $env:CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH = $recoveryMarkerPath
         $env:CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH = $diskSaveBlockPath
@@ -278,6 +299,21 @@ try {
     $documentName = if ($Scenario -eq 'recovery') { 'recovery-proof.md' } else { 'desktop-proof.md' }
     Set-PromptText -Text $projectName
     Find-Element -Using 'xpath' -Value "//nav[@aria-label='Projects']//button[.//span[normalize-space()='$projectName']]" | Out-Null
+
+    if ($InstalledRelease) {
+        $trackedFolderName = Split-Path -Leaf $trackedRoot
+        $trackedFolder = Find-Element -Using 'xpath' -Value "//button[contains(@class,'navigation-row') and .//span[normalize-space()='$trackedFolderName']]"
+        Click-Element -ElementId $trackedFolder
+        $trackedEntry = Find-Element -Using 'xpath' -Value "//button[contains(@class,'tracked-entry') and .//span[normalize-space()='tracked-proof.md']]"
+        Click-Element -ElementId $trackedEntry
+        Wait-ElementText -Using 'css selector' -Value '.document-header h2' -Expected 'tracked-proof.md' -TimeoutSeconds 30 | Out-Null
+        $importedPath = Join-Path (Join-Path $libraryRoot $projectName) 'tracked-proof.md'
+        Wait-File -Path $importedPath -Description 'The imported tracked Markdown copy' -TimeoutSeconds 30
+        if ((Get-Content -LiteralPath $trackedFile -Raw) -ne $trackedOriginal) {
+            throw 'Import changed the original file in the tracked PC folder.'
+        }
+        Write-Host 'Tracked-folder import passed and the original source stayed unchanged.'
+    }
 
     $newDocument = Find-Element -Using 'xpath' -Value "//button[normalize-space()='New document']"
     Click-Element -ElementId $newDocument
@@ -386,6 +422,11 @@ try {
     Remove-Item Env:CAIRN_WEBDRIVER_LIBRARY_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_SCENARIO -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_OUTPUT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_LIBRARY_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_TRACKED_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $recoveryMarkerPath, $diskSaveBlockPath -Force -ErrorAction SilentlyContinue
     Clear-WebViewData -BestEffort

@@ -2,16 +2,22 @@ import { editorViewCtx } from "@milkdown/kit/core";
 import { useEffect, useRef, useState } from "react";
 
 import {
+  getPerformanceFixturePaths,
   getPerformanceScenario,
   markPerformanceReady,
   writePerformanceReport,
 } from "../../lib/tauri/performance";
+import { addTrackedFolder } from "../../lib/tauri/import";
+import { bindLibraryRoot, type LibrarySnapshot } from "../../lib/tauri/library";
 import { MarkdownSession } from "../editor/session/MarkdownSession";
 import { VisualSession } from "../editor/visual/VisualSession";
 import {
   createVisualSegmentEditor,
   type VisualSegmentEditorHandle,
 } from "../editor/visual/createVisualSegmentEditor";
+import { Workspace } from "../library/components/Workspace";
+import type { TrackedFolderSnapshot } from "../../lib/tauri/import";
+import type { Appearance } from "../settings/appearance/appearance";
 import { normalPerformanceDocument } from "./normalDocument";
 
 const sampleCount = 20;
@@ -38,6 +44,11 @@ export function PerformanceRunner() {
   const primaryHost = useRef<HTMLDivElement>(null);
   const scratchHost = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("Preparing release measurements…");
+  const [workspace, setWorkspace] = useState<{
+    snapshot: LibrarySnapshot;
+    trackedFolders: readonly TrackedFolderSnapshot[];
+  } | null>(null);
+  const [appearance, setAppearance] = useState<Appearance>("followWindows");
 
   useEffect(() => {
     const primaryParent = primaryHost.current;
@@ -49,6 +60,16 @@ export function PerformanceRunner() {
     void (async () => {
       try {
         const scenario = await getPerformanceScenario();
+        if (scenario === "workspace") {
+          const paths = await getPerformanceFixturePaths();
+          const snapshot = await bindLibraryRoot(paths.libraryRoot);
+          const trackedFolder = await addTrackedFolder(paths.trackedRoot);
+          if (!active) return;
+          setWorkspace({ snapshot, trackedFolders: [trackedFolder] });
+          await afterPaint();
+          if (active) await markPerformanceReady();
+          return;
+        }
         const source = normalPerformanceDocument();
         primary = await openVisualEditor(primaryParent, source);
         await afterPaint();
@@ -105,6 +126,17 @@ export function PerformanceRunner() {
       }
     };
   }, []);
+
+  if (workspace) {
+    return (
+      <Workspace
+        initialSnapshot={workspace.snapshot}
+        initialTrackedFolders={workspace.trackedFolders}
+        appearance={appearance}
+        onAppearanceChange={setAppearance}
+      />
+    );
+  }
 
   return (
     <main className="performance-runner">

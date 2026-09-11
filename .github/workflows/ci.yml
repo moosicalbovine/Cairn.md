@@ -112,6 +112,25 @@ jobs:
           } | ConvertTo-Json | Set-Content performance-results\environment.json
       - name: Measure release performance
         run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
+      - name: Install matching Edge WebDriver for release validation
+        if: always()
+        shell: pwsh
+        run: |
+          $webViewRoot = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'
+          $version = if (Test-Path $webViewRoot) {
+            Get-ChildItem $webViewRoot -Directory |
+              Where-Object { $_.Name -match '^\d+(\.\d+){1,3}$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty Name
+          }
+          if (-not $version) { throw 'Microsoft Edge WebView2 Runtime is not installed on the runner' }
+          $archive = Join-Path $env:RUNNER_TEMP 'release-edgedriver.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'release-edgedriver'
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          Write-Host "WebView2 Runtime: $version"
+          & (Join-Path $destination 'msedgedriver.exe') --version
+          $destination >> $env:GITHUB_PATH
       - name: Validate current-user installer
         id: installer-smoke
         if: always()

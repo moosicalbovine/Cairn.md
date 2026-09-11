@@ -2,17 +2,26 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const PERFORMANCE_MODE: &str = "CAIRN_PERF_MODE";
 const PERFORMANCE_OUTPUT: &str = "CAIRN_PERF_OUTPUT";
 const PERFORMANCE_SCENARIO: &str = "CAIRN_PERF_SCENARIO";
+const PERFORMANCE_LIBRARY_ROOT: &str = "CAIRN_PERF_LIBRARY_ROOT";
+const PERFORMANCE_TRACKED_ROOT: &str = "CAIRN_PERF_TRACKED_ROOT";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserPerformanceReport {
     document_open_ms: Vec<f64>,
     input_latency_ms: Vec<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformanceFixturePaths {
+    library_root: PathBuf,
+    tracked_root: PathBuf,
 }
 
 fn performance_output() -> Result<PathBuf, String> {
@@ -53,8 +62,40 @@ pub fn performance_mode() -> bool {
 pub fn performance_scenario() -> &'static str {
     match std::env::var(PERFORMANCE_SCENARIO).as_deref() {
         Ok("idle") => "idle",
+        Ok("workspace") => "workspace",
         _ => "full",
     }
+}
+
+fn fixture_path(name: &str) -> Result<PathBuf, String> {
+    let value = std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{name} is required for the workspace fixture"))?;
+    absolute_fixture_path(value, name)
+}
+
+fn absolute_fixture_path(value: OsString, name: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err(format!("{name} must be an absolute path"));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+pub fn performance_fixture_paths() -> Result<PerformanceFixturePaths, String> {
+    if !performance_mode() || performance_scenario() != "workspace" {
+        return Err("The workspace fixture is disabled".to_owned());
+    }
+    let library_root = fixture_path(PERFORMANCE_LIBRARY_ROOT)?;
+    let tracked_root = fixture_path(PERFORMANCE_TRACKED_ROOT)?;
+    if library_root == tracked_root {
+        return Err("Workspace fixture roots must be different".to_owned());
+    }
+    Ok(PerformanceFixturePaths {
+        library_root,
+        tracked_root,
+    })
 }
 
 #[tauri::command]
@@ -78,7 +119,9 @@ pub fn write_performance_report(report: BrowserPerformanceReport) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::validate_samples;
+    use std::ffi::OsString;
+
+    use super::{absolute_fixture_path, validate_samples};
 
     #[test]
     fn performance_reports_require_twenty_valid_samples() {
@@ -87,5 +130,10 @@ mod tests {
         let mut invalid = vec![1.0; 20];
         invalid[4] = f64::NAN;
         assert!(validate_samples(&invalid, "metric").is_err());
+    }
+
+    #[test]
+    fn fixture_paths_must_be_absolute() {
+        assert!(absolute_fixture_path(OsString::from("relative"), "fixture").is_err());
     }
 }
