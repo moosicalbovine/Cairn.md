@@ -1,7 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import { LibrarySetup } from "../features/library/components/LibrarySetup";
-import { Workspace } from "../features/library/components/Workspace";
 import {
   applyAppearance,
   loadAppearance,
@@ -20,6 +18,16 @@ import "./app.css";
 const PerformanceRunner = lazy(() =>
   import("../features/performance/PerformanceRunner").then((module) => ({
     default: module.PerformanceRunner,
+  })),
+);
+const LibrarySetup = lazy(() =>
+  import("../features/library/components/LibrarySetup").then((module) => ({
+    default: module.LibrarySetup,
+  })),
+);
+const Workspace = lazy(() =>
+  import("../features/library/components/Workspace").then((module) => ({
+    default: module.Workspace,
   })),
 );
 
@@ -101,16 +109,22 @@ export function App() {
   }
 
   if (snapshot.binding === null) {
-    return <LibrarySetup onBound={setSnapshot} />;
+    return (
+      <Suspense fallback={<main className="startup-screen">Opening library setup…</main>}>
+        <LibrarySetup onBound={setSnapshot} />
+      </Suspense>
+    );
   }
 
   return (
-    <Workspace
-      key={`${snapshot.binding.libraryId}:${snapshot.binding.generation}`}
-      initialSnapshot={snapshot}
-      initialTrackedFolders={trackedFolders}
-      appearance={appearance}
-      onAppearanceChange={setAppearance}
-    />
+    <Suspense fallback={<main className="startup-screen">Opening your Markdown library…</main>}>
+      <Workspace
+        key={`${snapshot.binding.libraryId}:${snapshot.binding.generation}`}
+        initialSnapshot={snapshot}
+        initialTrackedFolders={trackedFolders}
+        appearance={appearance}
+        onAppearanceChange={setAppearance}
+      />
+    </Suspense>
   );
 }
