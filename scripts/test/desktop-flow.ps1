@@ -18,7 +18,8 @@ $libraryRoot = Join-Path $testBase 'library'
 $webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
 $stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
 $stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
-$recoveryBarrierPath = Join-Path $testBase 'recovery-barrier.ready'
+$recoveryMarkerPath = Join-Path $testBase 'recovery-marker.txt'
+$diskSaveBlockPath = Join-Path $testBase 'disk-save-blocked.ready'
 $driver = $null
 $sessionId = $null
 
@@ -156,6 +157,37 @@ function Wait-File {
     throw "$Description was not available within $TimeoutSeconds seconds."
 }
 
+function Wait-FileValue {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Expected,
+        [Parameter(Mandatory)][string]$Description,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                $value = (Get-Content -LiteralPath $Path -Raw).Trim()
+                if ($Expected -contains $value) { return $value }
+            } catch {}
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "$Description did not reach an expected value within $TimeoutSeconds seconds."
+}
+
+function Get-Sha256Fingerprint {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))
+        return 'sha256:' + (($hash | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
 function Find-Element {
     param(
         [Parameter(Mandatory)][string]$Using,
@@ -232,7 +264,8 @@ try {
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
     $env:TAURI_WEBVIEW_AUTOMATION = 'true'
     if ($Scenario -eq 'recovery') {
-        $env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH = $recoveryBarrierPath
+        $env:CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH = $recoveryMarkerPath
+        $env:CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH = $diskSaveBlockPath
     }
 
     Write-Host "Starting Cairn.md desktop $Scenario flow."
@@ -262,9 +295,19 @@ try {
 
     if ($Scenario -eq 'recovery') {
         $acknowledgedAt = [DateTime]::UtcNow
-        Wait-File -Path $recoveryBarrierPath -Description 'The durable recovery barrier' -TimeoutSeconds 30
-        Write-Host 'The recovery snapshot is durable; forcing process termination before disk save.'
-        Start-Sleep -Milliseconds 1000
+        $expectedFingerprints = @(
+            Get-Sha256Fingerprint -Text $expectedText
+            Get-Sha256Fingerprint -Text "$expectedText`n"
+            Get-Sha256Fingerprint -Text "$expectedText`r`n"
+        )
+        Wait-File -Path $diskSaveBlockPath -Description 'The deterministic disk-save block' -TimeoutSeconds 30
+        Wait-FileValue -Path $recoveryMarkerPath -Expected $expectedFingerprints `
+            -Description 'The complete durable recovery snapshot' -TimeoutSeconds 30 | Out-Null
+        $recoveryLag = [DateTime]::UtcNow - $acknowledgedAt
+        if ($recoveryLag.TotalSeconds -gt 2) {
+            throw "Durable recovery exceeded two seconds after acknowledged input: $([math]::Round($recoveryLag.TotalMilliseconds)) ms"
+        }
+        Write-Host 'The complete recovery snapshot is durable and the disk save is blocked; forcing process termination.'
         $appProcess = Find-CairnProcess
         $termination = Start-Process -FilePath 'taskkill.exe' `
             -ArgumentList '/PID', $appProcess.Id, '/T', '/F' `
@@ -276,8 +319,9 @@ try {
         $terminationLag = [DateTime]::UtcNow - $acknowledgedAt
 
         Stop-DriverSession
-        Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $recoveryBarrierPath -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH -ErrorAction SilentlyContinue
+        Remove-Item Env:CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $recoveryMarkerPath, $diskSaveBlockPath -Force -ErrorAction SilentlyContinue
         Write-Host 'Restarting the same Cairn.md workspace to resolve recovery.'
         Start-DriverSession
         Find-Element -Using 'css selector' -Value '.desktop-shell' | Out-Null
@@ -317,7 +361,7 @@ try {
     }
 
     if ($Scenario -eq 'recovery') {
-        Write-Host "Recovery flow passed: forced termination after $([math]::Round($terminationLag.TotalMilliseconds)) ms preserved the acknowledged edit and returned to Saved."
+        Write-Host "Recovery flow passed: the complete edit reached durable recovery in $([math]::Round($recoveryLag.TotalMilliseconds)) ms; forced termination completed after $([math]::Round($terminationLag.TotalMilliseconds)) ms and the document returned to Saved."
     } else {
         Write-Host 'Desktop flow passed: project, document, visual edit, autosave, source mode, and persistent contents navigation.'
     }
@@ -340,9 +384,10 @@ try {
     Remove-Item Env:CAIRN_WEBDRIVER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_LIBRARY_ROOT -ErrorAction SilentlyContinue
-    Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $recoveryBarrierPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $recoveryMarkerPath, $diskSaveBlockPath -Force -ErrorAction SilentlyContinue
     Clear-WebViewData -BestEffort
     $resolvedBase = [IO.Path]::GetFullPath($testBase)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

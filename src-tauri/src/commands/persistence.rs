@@ -5,27 +5,37 @@ use crate::domain::library::{DocumentContent, DocumentSnapshot, LibraryError};
 use crate::domain::recovery::{RecoverySnapshot, RecoverySnapshotRequest, SaveDocumentResult};
 
 #[cfg(debug_assertions)]
-fn wait_for_webdriver_recovery_barrier() -> Result<(), LibraryError> {
+fn webdriver_test_path(variable: &str) -> Option<std::path::PathBuf> {
     if std::env::var("CAIRN_WEBDRIVER_MODE").as_deref() != Ok("1") {
-        return Ok(());
+        return None;
     }
-    let Some(path) = std::env::var_os("CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH")
+    std::env::var_os(variable)
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
-    else {
+}
+
+#[cfg(debug_assertions)]
+fn mark_webdriver_recovery(snapshot: &RecoverySnapshot) -> Result<(), LibraryError> {
+    let Some(path) = webdriver_test_path("CAIRN_WEBDRIVER_RECOVERY_MARKER_PATH") else {
         return Ok(());
     };
-    std::fs::write(&path, b"recovery-durable").map_err(LibraryError::io)?;
-    let started = std::time::Instant::now();
-    while path.exists() {
-        if started.elapsed() >= std::time::Duration::from_secs(60) {
-            return Err(LibraryError::new(
-                "webdriver_barrier_timeout",
-                "The WebDriver recovery barrier was not released",
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+    std::fs::write(path, snapshot.content_hash.as_bytes()).map_err(LibraryError::io)
+}
+
+#[cfg(debug_assertions)]
+fn prevent_webdriver_disk_save() -> Result<(), LibraryError> {
+    let Some(path) = webdriver_test_path("CAIRN_WEBDRIVER_DISK_SAVE_BLOCK_PATH") else {
+        return Ok(());
+    };
+    std::fs::write(path, b"disk-save-blocked").map_err(LibraryError::io)?;
+    Err(LibraryError::new(
+        "webdriver_disk_save_blocked",
+        "The WebDriver recovery test blocked the disk save",
+    ))
+}
+
+#[cfg(not(debug_assertions))]
+fn prevent_webdriver_disk_save() -> Result<(), LibraryError> {
     Ok(())
 }
 
@@ -36,7 +46,7 @@ pub fn store_recovery_snapshot(
 ) -> Result<RecoverySnapshot, LibraryError> {
     let snapshot = service(&state)?.store_recovery_snapshot(request)?;
     #[cfg(debug_assertions)]
-    wait_for_webdriver_recovery_barrier()?;
+    mark_webdriver_recovery(&snapshot)?;
     Ok(snapshot)
 }
 
@@ -62,6 +72,7 @@ pub fn save_document(
     state: State<'_, LibraryState>,
     request: RecoverySnapshotRequest,
 ) -> Result<SaveDocumentResult, LibraryError> {
+    prevent_webdriver_disk_save()?;
     service(&state)?.save_document(request)
 }
 
