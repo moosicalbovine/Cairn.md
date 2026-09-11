@@ -2,7 +2,7 @@
 
 ## Windows blocks the installer
 
-Development installers are unsigned and may trigger Microsoft Defender SmartScreen. Verify that the installer came from this repository's GitHub Actions artifact for the expected commit. Do not bypass a warning for a file from another source. Public releases should be signed before distribution.
+The v0.1.0 installer is unsigned and may trigger Microsoft Defender SmartScreen. Verify that the installer came from this repository's GitHub release and that its SHA-256 checksum matches the accompanying `.sha256` file. Do not bypass a warning for a file from another source. A future broadly promoted release should be signed before distribution.
 
 ## Cairn.md says WebView2 is unavailable
 

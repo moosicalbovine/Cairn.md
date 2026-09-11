@@ -36,9 +36,11 @@ $version = (Get-Content "src-tauri\tauri.conf.json" | ConvertFrom-Json).version
 npm run release:validate -- -InstallerPath $installer.FullName -ExpectedVersion $version
 ```
 
-The script installs for the current user, launches the installed editor with isolated app data, waits for the real editor-ready signal, uninstalls silently, and confirms a user-library sentinel remains. It does not replace the clean-sandbox WebView2-present and WebView2-absent checklist below.
+The script installs for the current user and runs an isolated workflow through the installed release binary: create a project, import from a tracked folder, visually edit Markdown, inspect the same edit through Source mode, and persist it through the recovery-backed save path. It verifies that the tracked original stays unchanged, performs a same-version reinstall, uninstalls silently, and confirms the user-selected library remains.
 
-CI retains unsigned installer artifacts for 14 days. Signing is conditional on a maintainer-provided certificate and timestamp service; secrets must never be committed. A public release must clearly say whether its installer is signed.
+The release workflows run that test first with Evergreen WebView2 present. On a disposable GitHub Actions runner only, they then remove the runtime behind explicit environment and path guards and run the installer again, proving that the embedded bootstrapper restores WebView2 before the same installed workflow executes.
+
+CI retains ordinary unsigned installer artifacts for 14 days and release evidence for 90 days. Signing is conditional on a maintainer-provided certificate and timestamp service; secrets must never be committed. Every release must clearly say whether its installer is signed.
 
 ## Performance evidence
 
@@ -52,11 +54,11 @@ Complete this from a clean Windows sandbox before release:
 - [ ] Launch with an existing Evergreen WebView2 runtime.
 - [ ] Launch on a snapshot without WebView2 and verify the embedded bootstrapper path.
 - [ ] Disconnect networking after prerequisites are installed and complete create, import, edit, autosave, recovery, and reconnect flows.
-- [ ] Upgrade from the previous released version and preserve library binding, provenance, and recovery metadata.
+- [ ] Upgrade from the previous released version and preserve library binding, provenance, and recovery metadata. Not applicable to v0.1.0, which has no predecessor.
 - [ ] Attempt a downgrade and confirm it is blocked.
 - [ ] Uninstall and confirm the user-selected library folder and Markdown files remain untouched.
 - [ ] Reinstall and reconnect the retained library.
-- [ ] Verify the installer and installed executable signatures when signing is enabled.
+- [ ] Verify the installer and installed executable signatures when signing is enabled. Not applicable to the explicitly unsigned v0.1.0 preview.
 
 ## Release gate
 

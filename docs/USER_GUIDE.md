@@ -1,7 +1,8 @@
 # Cairn.md User Guide
 
 > [!NOTE]
-> Cairn.md is under active `v0.1.0` development. Screens and wording may still change before the first signed release.
+> Cairn.md `v0.1.0` is an early MVP. Its Windows installer is unsigned; verify
+> the release checksum before running it.
 
 ## What Cairn.md is for
 

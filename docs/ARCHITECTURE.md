@@ -43,6 +43,11 @@ Imports copy to a same-directory temporary file, verify the source before and af
 
 Visual mode uses Milkdown 7 over contiguous supported CommonMark and GitHub Flavored Markdown regions. Unsupported HTML, front matter, math-like syntax, and ambiguous blocks stay source-backed. Visual transactions patch only the mapped source range. Stable region IDs and projection subscriptions keep multiple mounted regions on the same current revision.
 
+Large supported documents are divided at top-level heading boundaries into
+section-sized source ranges. The first editable section mounts immediately;
+later sections reserve layout space and initialize as they approach the scroll
+viewport. Small documents retain one visual editing region.
+
 Invalid UTF-8 files open read-only and retain their original bytes. Opening, switching modes, and closing without edits are byte-preserving operations.
 
 ## Autosave and recovery
@@ -59,7 +64,7 @@ Watcher events are hints. Rust performs an authoritative scan before updating th
 
 ## Startup and performance
 
-Startup reads the cached SQLite index and tracked folders in parallel, then makes the workspace interactive. Full filesystem reconciliation runs in the mounted workspace instead of blocking the splash screen. Milkdown and CodeMirror are lazy chunks.
+Startup reads the cached SQLite index and tracked folders in parallel, then makes the workspace interactive. Full filesystem reconciliation runs in the mounted workspace instead of blocking the splash screen. Workspace, setup, Milkdown, and CodeMirror code are loaded as separate lazy chunks.
 
 The release benchmark launches isolated app instances, waits for a real Milkdown ready signal, records startup, document-open, edit-to-paint, and full process-tree memory samples, then applies the thresholds in [PERFORMANCE.md](PERFORMANCE.md).
 
