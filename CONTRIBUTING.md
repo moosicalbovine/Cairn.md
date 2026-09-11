@@ -64,14 +64,14 @@ Windows-only and additionally requires Microsoft Edge WebDriver matching the
 installed WebView2 Runtime on `PATH`. Build and run it with:
 
 ```powershell
-npm run tauri build -- --debug --no-bundle
+npm run tauri build -- --debug --no-bundle --config src-tauri/tauri.webdriver.conf.json
 npm run test:desktop
 ```
 
 CI downloads the matching Edge WebDriver automatically. The desktop harness
-drives its W3C protocol directly and uses isolated temporary library, app-data,
-and WebView2 user-data directories. It never opens the user's configured Cairn.md
-library.
+drives its W3C protocol directly and uses temporary library and app-data
+directories plus a dedicated test-only WebView2 profile. It never opens the
+user's configured Cairn.md library or production WebView2 profile.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing persistence or filesystem behavior. Those paths fail closed intentionally and require fault-injection coverage.
 

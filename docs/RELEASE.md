@@ -16,7 +16,7 @@ npm run lint
 npm run typecheck
 npm test -- --run
 npm run test:flows
-npm run tauri build -- --debug --no-bundle
+npm run tauri build -- --debug --no-bundle --config src-tauri/tauri.webdriver.conf.json
 npm run test:desktop
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

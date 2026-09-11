@@ -36,7 +36,7 @@ jobs:
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
       - name: Build desktop WebDriver binary
-        run: npm run tauri build -- --debug --no-bundle
+        run: npm run tauri build -- --debug --no-bundle --config src-tauri/tauri.webdriver.conf.json
       - name: Install matching Edge WebDriver
         shell: pwsh
         run: |

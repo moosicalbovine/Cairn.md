@@ -3,12 +3,15 @@ param([string]$BinaryPath = "src-tauri\target\debug\cairn-md.exe")
 $ErrorActionPreference = 'Stop'
 $port = 4444
 $elementKey = 'element-6066-11e4-a52e-4f735466cecf'
+$webviewIdentifier = 'io.github.moosicalbovine.cairn-md-webdriver'
 $resolvedBinary = (Resolve-Path -LiteralPath $BinaryPath).Path
 $driverCommand = Get-Command 'msedgedriver' -ErrorAction Stop
 $testBase = Join-Path ([IO.Path]::GetTempPath()) ("cairn-webdriver-" + [Guid]::NewGuid().ToString('N'))
 $appData = Join-Path $testBase 'app-data'
 $libraryRoot = Join-Path $testBase 'library'
-$webviewData = Join-Path $testBase 'webview-data'
+# Tauri forces an unconfigured WebView data directory to LOCALAPPDATA/<identifier>.
+# Keep this identifier aligned with tauri.webdriver.conf.json so EdgeDriver can attach.
+$webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
 $stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
 $stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
 $driver = $null
@@ -114,7 +117,7 @@ function Wait-ElementText {
 }
 
 try {
-    New-Item -ItemType Directory -Path $appData, $libraryRoot, $webviewData -Force | Out-Null
+    New-Item -ItemType Directory -Path $appData, $libraryRoot -Force | Out-Null
     $env:CAIRN_WEBDRIVER_MODE = '1'
     $env:CAIRN_APP_DATA_DIR = $appData
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
