@@ -19,7 +19,9 @@ $uninstaller = $null
 $uninstallAttempted = $false
 
 function Find-CairnUninstallEntry {
-    Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+    $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+    if (-not (Test-Path -LiteralPath $uninstallRoot)) { return $null }
+    Get-ChildItem -LiteralPath $uninstallRoot |
         Get-ItemProperty |
         Where-Object { $_.DisplayName -eq 'Cairn.md' } |
         Select-Object -First 1

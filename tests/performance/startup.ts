@@ -50,7 +50,7 @@ type PerformanceProcess = Readonly<{
 }>;
 
 const pollIntervalMs = 50;
-const startupTimeoutMs = 10_000;
+const startupTimeoutMs = 60_000;
 const reportTimeoutMs = 120_000;
 const startupLimitMs = 1_500;
 const documentOpenLimitMs = 250;
