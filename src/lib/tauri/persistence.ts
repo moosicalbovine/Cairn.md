@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isRecord } from "../validation";
 import {
   parseDocumentContent,
   parseDocumentSnapshot,
@@ -35,10 +36,6 @@ export type SaveDocumentResult = Readonly<{
   revision: number;
   diskFingerprint: string;
 }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isByteArray(value: unknown): value is number[] {
   return (

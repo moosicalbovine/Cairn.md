@@ -1,14 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isRecord } from "../validation";
+
 export type HealthResponse = Readonly<{
   app: "Cairn.md";
   version: string;
   status: "ok";
 }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function parseHealth(value: unknown): HealthResponse {
   if (!isRecord(value)) {

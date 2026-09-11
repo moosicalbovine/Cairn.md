@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isRecord } from "../validation";
 import { parseDocumentSnapshot, type DocumentSnapshot } from "./library";
 
 export type ExternalImportSource = Readonly<{
@@ -28,10 +29,6 @@ export type TrackedFolderEntry = Readonly<{
   displayName: string;
   isDirectory: boolean;
 }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isNullableTimestamp(value: unknown): value is number | null {
   return value === null || (Number.isSafeInteger(value) && (value as number) >= 0);

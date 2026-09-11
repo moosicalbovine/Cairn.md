@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isRecord } from "../validation";
+
 export type LibraryMode = "writable" | "readOnly";
 
 export type LibraryBinding = Readonly<{
@@ -65,10 +67,6 @@ export type DeletedDocument = Readonly<{
   recoveryPath: string | null;
   recycled: boolean;
 }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isStringOrNull(value: unknown): value is string | null {
   return typeof value === "string" || value === null;
