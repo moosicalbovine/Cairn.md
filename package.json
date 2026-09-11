@@ -17,6 +17,7 @@
     "perf": "node --experimental-strip-types tests/performance/startup.ts",
     "perf:startup": "node --experimental-strip-types tests/performance/startup.ts",
     "release:validate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/validate-installer.ps1",
+    "release:verify-webview2": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-webview2-bootstrapper.ps1",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -29,6 +29,9 @@ export function WorkspaceLayout({
   const contentsPane = useRef<HTMLElement>(null);
   const showContentsButton = useRef<HTMLButtonElement>(null);
   const wasContentsVisible = useRef(contentsVisible);
+  const stopResize = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => stopResize.current?.(), []);
 
   useEffect(() => {
     if (!contentsVisible) {
@@ -43,9 +46,12 @@ export function WorkspaceLayout({
   }, [contentsVisible]);
 
   function beginResize(event: ReactPointerEvent<HTMLDivElement>) {
+    stopResize.current?.();
     const startX = event.clientX;
     const startWidth = contentsWidth;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    const pointerId = event.pointerId;
+    const resizer = event.currentTarget;
+    resizer.setPointerCapture(pointerId);
 
     const move = (moveEvent: PointerEvent) => {
       const width = Math.min(
@@ -57,9 +63,16 @@ export function WorkspaceLayout({
     const finish = () => {
       globalThis.removeEventListener("pointermove", move);
       globalThis.removeEventListener("pointerup", finish);
+      globalThis.removeEventListener("pointercancel", finish);
+      if (resizer.hasPointerCapture(pointerId)) {
+        resizer.releasePointerCapture(pointerId);
+      }
+      stopResize.current = null;
     };
     globalThis.addEventListener("pointermove", move);
     globalThis.addEventListener("pointerup", finish);
+    globalThis.addEventListener("pointercancel", finish);
+    stopResize.current = finish;
   }
 
   return (

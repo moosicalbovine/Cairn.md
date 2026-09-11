@@ -1,13 +1,21 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkspaceLayout } from "../../src/components/layout/WorkspaceLayout";
 import { LibraryPane } from "../../src/features/library/components/LibraryPane";
+import type {
+  TrackedFolderEntry,
+  TrackedFolderSnapshot,
+} from "../../src/lib/tauri/import";
 import type { ProjectSnapshot } from "../../src/lib/tauri/library";
 
+const trackedFolderMocks = vi.hoisted(() => ({
+  browse: vi.fn(async (): Promise<readonly TrackedFolderEntry[]> => []),
+}));
+
 vi.mock("../../src/features/library/tracked-folders/trackedFolderBrowser", () => ({
-  browseTrackedFolder: vi.fn(async () => []),
+  browseTrackedFolder: trackedFolderMocks.browse,
 }));
 
 function LayoutHarness() {
@@ -32,6 +40,14 @@ const projects: readonly ProjectSnapshot[] = [
   { id: "alpha", relativePath: "Alpha", documents: [] },
   { id: "beta", relativePath: "Beta", documents: [] },
 ];
+
+const trackedFolders: readonly TrackedFolderSnapshot[] = [{
+  id: "tracked-1",
+  absolutePath: "C:\\Incoming",
+  displayName: "Incoming",
+  available: true,
+  lastScanAt: null,
+}];
 
 describe("workspace accessibility", () => {
   it("labels all panes and supports keyboard resizing", () => {
@@ -80,5 +96,33 @@ describe("workspace accessibility", () => {
 
     expect(onSelectProject).toHaveBeenCalledWith(projects[1]);
     expect(screen.getByRole("button", { name: "Beta" })).toHaveFocus();
+  });
+
+  it("clears entries when the active tracked folder is removed", async () => {
+    trackedFolderMocks.browse.mockResolvedValueOnce([
+      { relativePath: "brief.md", displayName: "brief.md", isDirectory: false },
+    ]);
+    const properties = {
+      projects,
+      selectedProjectId: "alpha",
+      canMutate: true,
+      onSelectProject: vi.fn(),
+      onCreateProject: vi.fn(),
+      onRenameProject: vi.fn(),
+      onAddTrackedFolder: vi.fn(),
+      onRemoveTrackedFolder: vi.fn(),
+      onImportTracked: vi.fn(),
+    };
+    const { rerender } = render(
+      <LibraryPane {...properties} trackedFolders={trackedFolders} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Incoming" }));
+    expect(await screen.findByRole("button", { name: "brief.md" })).toBeInTheDocument();
+
+    rerender(<LibraryPane {...properties} trackedFolders={[]} />);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "brief.md" })).not.toBeInTheDocument();
+    });
   });
 });

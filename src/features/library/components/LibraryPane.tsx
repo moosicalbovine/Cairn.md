@@ -38,13 +38,16 @@ export function LibraryPane({
   const [entries, setEntries] = useState<readonly TrackedFolderEntry[]>([]);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const projectButtons = useRef<Array<HTMLButtonElement | null>>([]);
+  const browsedFolderId = trackedFolders.some((folder) => folder.id === activeFolderId)
+    ? activeFolderId
+    : null;
 
   useEffect(() => {
-    if (activeFolderId === null) {
+    if (browsedFolderId === null) {
       return;
     }
     let current = true;
-    void browseTrackedFolder(activeFolderId, directory).then(
+    void browseTrackedFolder(browsedFolderId, directory).then(
       (value) => {
         if (current) {
           setBrowseError(null);
@@ -62,7 +65,7 @@ export function LibraryPane({
     return () => {
       current = false;
     };
-  }, [activeFolderId, directory]);
+  }, [browsedFolderId, directory]);
 
   function moveProjectFocus(index: number, direction: -1 | 1) {
     if (projects.length === 0) return;
@@ -158,24 +161,24 @@ export function LibraryPane({
               </button>
             </div>
           ))}
-          {activeFolderId && directory && (
+          {browsedFolderId && directory && (
             <button className="navigation-row tracked-entry" type="button" onClick={() => setDirectory(directory.includes("/") ? directory.slice(0, directory.lastIndexOf("/")) : null)}>
               <span aria-hidden="true">←</span><span>Back</span>
             </button>
           )}
-          {entries.map((entry) => (
+          {browsedFolderId && entries.map((entry) => (
             <button
               key={entry.relativePath}
               className="navigation-row tracked-entry"
               type="button"
               disabled={!entry.isDirectory && !canMutate}
-              onClick={() => entry.isDirectory ? setDirectory(entry.relativePath) : onImportTracked(activeFolderId ?? "", entry)}
+              onClick={() => entry.isDirectory ? setDirectory(entry.relativePath) : onImportTracked(browsedFolderId, entry)}
             >
               <span aria-hidden="true">{entry.isDirectory ? "▱" : "M↓"}</span>
               <span>{entry.displayName}</span>
             </button>
           ))}
-          {browseError && <p className="inline-error" role="alert">{browseError}</p>}
+          {browsedFolderId && browseError && <p className="inline-error" role="alert">{browseError}</p>}
         </div>
       )}
     </div>
