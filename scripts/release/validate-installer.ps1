@@ -129,6 +129,19 @@ try {
         throw 'The installed workflow changed the original tracked Markdown file'
     }
 
+    $reinstall = Start-Process -FilePath $resolvedInstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
+    if ($reinstall.ExitCode -ne 0) {
+        throw "Same-version reinstall exited with code $($reinstall.ExitCode)"
+    }
+    $reinstalledEntry = Find-CairnUninstallEntry
+    if ($null -eq $reinstalledEntry -or $reinstalledEntry.DisplayVersion -ne $ExpectedVersion) {
+        throw 'Cairn.md reinstall did not preserve its current-user registration'
+    }
+    $uninstaller = Resolve-UninstallerPath $reinstalledEntry
+    if (-not (Test-Path -LiteralPath $savedDocument)) {
+        throw 'Cairn.md reinstall removed the user-selected library'
+    }
+
     $uninstallAttempted = $true
     $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
     if ($uninstall.ExitCode -ne 0) {
