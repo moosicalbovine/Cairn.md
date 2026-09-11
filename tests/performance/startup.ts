@@ -50,6 +50,7 @@ type PerformanceProcess = Readonly<{
 }>;
 
 const pollIntervalMs = 50;
+const startupResetDelayMs = 1_000;
 const startupTimeoutMs = 60_000;
 const reportTimeoutMs = 120_000;
 const startupLimitMs = 1_500;
@@ -184,6 +185,9 @@ async function measureStartup(binaryPath: string, sample: number): Promise<Start
     };
   } finally {
     stopPerformanceProcess(run);
+    // Rapid WebView2 process-tree relaunches can overlap Windows cleanup and
+    // antimalware work. Keep every sample, but let the host return to idle first.
+    await delay(startupResetDelayMs);
   }
 }
 
@@ -316,6 +320,7 @@ async function run(options: BenchmarkOptions): Promise<void> {
     measuredAt: new Date().toISOString(),
     commit: process.env.GITHUB_SHA ?? "local",
     binaryPath: options.binaryPath,
+    startupResetDelayMs,
     environment: {
       platform: process.platform,
       architecture: process.arch,
