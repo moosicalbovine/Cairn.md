@@ -41,6 +41,18 @@ async function afterPaint(): Promise<void> {
   });
 }
 
+async function waitForSource(
+  condition: () => boolean,
+  timeoutMilliseconds = 5_000,
+): Promise<void> {
+  const deadline = performance.now() + timeoutMilliseconds;
+  while (performance.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("The visual edit did not reach canonical Markdown.");
+}
+
 export function InstalledSmokeRunner() {
   const editorHost = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("Checking the installed Cairn.md workflow…");
@@ -90,9 +102,7 @@ export function InstalledSmokeRunner() {
           view.dispatch(view.state.tr.insertText(visualEdit));
         });
         await afterPaint();
-        if (!session.session.source.includes(visualEdit)) {
-          throw new Error("The visual edit did not reach canonical Markdown.");
-        }
+        await waitForSource(() => session?.session.source.includes(visualEdit) ?? false);
         report = { ...report, visualEdit: true };
 
         session.switchMode("source");
