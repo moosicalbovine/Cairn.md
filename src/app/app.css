@@ -109,6 +109,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .formatting-toolbar button:hover, .formatting-toolbar button:focus-visible { border-color: var(--line); background: var(--content); outline: none; }
 .visual-editor { min-height: 0; overflow: auto; padding: 28px clamp(24px, 7vw, 88px) 64px; }
 .visual-segment, .source-backed-block { width: min(100%, 800px); margin: 0 auto; }
+.visual-segment-placeholder { contain: layout paint; }
 .visual-segment .milkdown .ProseMirror { min-height: 1.5em; padding: 0; outline: none; color: var(--ink); font-family: Georgia, "Times New Roman", serif; font-size: 17px; line-height: 1.72; }
 .visual-segment .milkdown .ProseMirror h1, .visual-segment .milkdown .ProseMirror h2, .visual-segment .milkdown .ProseMirror h3 { line-height: 1.2; }
 .visual-segment .milkdown .ProseMirror a { color: var(--accent); }

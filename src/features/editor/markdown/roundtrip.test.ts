@@ -152,6 +152,38 @@ describe("source-ranged visual projection", () => {
     expect(visual.projection.revision).toBe(1);
   });
 
+  it("splits a large visual document into section-sized editing regions", () => {
+    const sections = Array.from({ length: 36 }, (_, index) =>
+      [
+        `## Section ${index + 1}`,
+        "",
+        `${`Paragraph ${index + 1} with portable Markdown. `.repeat(180)}`,
+      ].join("\n"),
+    );
+    const source = sections.join("\n\n");
+    const session = MarkdownSession.fromSource(source);
+    const visual = new VisualSession(session);
+
+    expect(source.length).toBeGreaterThan(128 * 1024);
+    expect(visual.projection.segments.length).toBeGreaterThan(1);
+    expect(
+      visual.projection.segments.every((segment) => segment.kind === "visual"),
+    ).toBe(true);
+    expect(session.source).toBe(source);
+
+    const second = visual.projection.segments[1];
+    expect(second).toBeDefined();
+    visual.replaceSegment(
+      second?.id ?? "missing",
+      second?.source.replace("portable Markdown", "edited Markdown") ?? "",
+      0,
+    );
+
+    expect(session.source.match(/edited Markdown/g)).toHaveLength(1);
+    expect(session.source).toContain("## Section 1");
+    expect(session.source).toContain("## Section 36");
+  });
+
   it("preserves the original Markdown spelling of untouched visual blocks", () => {
     const source =
       "# Heading #\n\nParagraph with _old_ text.\n\n* first\n* second\n";

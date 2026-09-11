@@ -76,9 +76,81 @@ function VisualSegment({
   );
 }
 
+function estimatedSegmentHeight(source: string): number {
+  const explicitLines = source.split(/\r?\n/).length;
+  const wrappedLines = Math.ceil(source.length / 90);
+  return Math.min(12_000, Math.max(160, Math.max(explicitLines, wrappedLines) * 29));
+}
+
+function DeferredVisualSegment({
+  visual,
+  segmentId,
+  source,
+  eager,
+  onFocus,
+  onError,
+}: Readonly<{
+  visual: VisualSession;
+  segmentId: string;
+  source: string;
+  eager: boolean;
+  onFocus(editor: Editor): void;
+  onError(message: string): void;
+}>) {
+  const placeholder = useRef<HTMLDivElement>(null);
+  const [shouldMount, setShouldMount] = useState(
+    eager || typeof IntersectionObserver === "undefined",
+  );
+
+  useEffect(() => {
+    const target = placeholder.current;
+    if (shouldMount || !target || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldMount(true);
+          observer.disconnect();
+        }
+      },
+      {
+        root: target.closest(".visual-editor"),
+        rootMargin: "800px 0px",
+      },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [shouldMount]);
+
+  if (shouldMount) {
+    return (
+      <VisualSegment
+        visual={visual}
+        segmentId={segmentId}
+        onFocus={onFocus}
+        onError={onError}
+      />
+    );
+  }
+
+  return (
+    <div
+      aria-hidden="true"
+      className="visual-segment visual-segment-placeholder"
+      ref={placeholder}
+      style={{ minHeight: estimatedSegmentHeight(source) }}
+    />
+  );
+}
+
 export function VisualDocumentEditor({ visual, onRequestSource }: VisualDocumentEditorProps) {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const firstVisualSegmentId = visual.projection.segments.find(
+    (segment) => segment.kind === "visual",
+  )?.id;
 
   function run(command: FormatCommand) {
     const editor = activeEditor;
@@ -131,10 +203,12 @@ export function VisualDocumentEditor({ visual, onRequestSource }: VisualDocument
       <div className="visual-editor" aria-label="Visual Markdown editor">
         {visual.projection.segments.map((segment) =>
           segment.kind === "visual" ? (
-            <VisualSegment
+            <DeferredVisualSegment
               key={segment.id}
               visual={visual}
               segmentId={segment.id}
+              source={segment.source}
+              eager={segment.id === firstVisualSegmentId}
               onFocus={setActiveEditor}
               onError={setError}
             />

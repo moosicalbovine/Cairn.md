@@ -33,6 +33,7 @@ interface SourceRange {
 }
 
 const unsupportedNodeTypes = new Set(["html"]);
+const visualSegmentTargetCharacters = 32 * 1024;
 
 function nodeRange(node: PositionedNode): SourceRange | undefined {
   const from = node.position?.start?.offset;
@@ -201,7 +202,12 @@ export function createMarkdownProjection(
   const grouped = editableSegments.reduce<Array<Omit<MarkdownProjectionSegment, "id">>>(
     (segments, segment) => {
       const previous = segments.at(-1);
-      if (previous?.kind === segment.kind) {
+      const startsNewLargeDocumentSection =
+        previous?.kind === "visual" &&
+        segment.kind === "visual" &&
+        segment.nodeType === "heading" &&
+        previous.to - previous.from >= visualSegmentTargetCharacters;
+      if (previous?.kind === segment.kind && !startsNewLargeDocumentSection) {
         segments[segments.length - 1] = {
           kind: previous.kind,
           from: previous.from,
