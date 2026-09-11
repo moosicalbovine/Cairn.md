@@ -12,6 +12,7 @@
     "test": "vitest",
     "test:flows": "vitest run tests/e2e",
     "test:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test/desktop-flow.ps1",
+    "test:recovery": "node --experimental-strip-types tests/performance/recovery.ts",
     "test:markdown": "vitest run src/features/editor/markdown/roundtrip.test.ts tests/e2e/editor-modes.spec.ts",
     "perf": "node --experimental-strip-types tests/performance/startup.ts",
     "perf:startup": "node --experimental-strip-types tests/performance/startup.ts",

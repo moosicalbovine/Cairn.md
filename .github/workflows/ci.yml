@@ -57,6 +57,8 @@ jobs:
           $destination >> $env:GITHUB_PATH
       - name: Test Windows desktop flows
         run: npm run test:desktop
+      - name: Test forced-termination recovery
+        run: npm run test:recovery
       - name: Build frontend
         run: npm run build
       - name: Build desktop application

@@ -1,4 +1,8 @@
-param([string]$BinaryPath = "src-tauri\target\debug\cairn-md.exe")
+param(
+    [string]$BinaryPath = "src-tauri\target\debug\cairn-md.exe",
+    [ValidateSet('workspace', 'recovery')]
+    [string]$Scenario = 'workspace'
+)
 
 $ErrorActionPreference = 'Stop'
 $port = 4444
@@ -9,11 +13,14 @@ $driverCommand = Get-Command 'msedgedriver' -ErrorAction Stop
 $testBase = Join-Path ([IO.Path]::GetTempPath()) ("cairn-webdriver-" + [Guid]::NewGuid().ToString('N'))
 $appData = Join-Path $testBase 'app-data'
 $libraryRoot = Join-Path $testBase 'library'
+$originalLocalAppData = $env:LOCALAPPDATA
+$isolatedLocalAppData = Join-Path $testBase 'local-app-data'
 # Tauri forces an unconfigured WebView data directory to LOCALAPPDATA/<identifier>.
 # Keep this identifier aligned with tauri.webdriver.conf.json so EdgeDriver can attach.
-$webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
+$webviewData = Join-Path $isolatedLocalAppData $webviewIdentifier
 $stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
 $stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
+$saveBarrierPath = Join-Path $testBase 'save-barrier.ready'
 $driver = $null
 $sessionId = $null
 
@@ -46,6 +53,75 @@ function Wait-Driver {
         }
     }
     throw 'Microsoft Edge WebDriver did not become ready within 30 seconds.'
+}
+
+function Start-DriverSession {
+    $script:driver = Start-Process -FilePath $driverCommand.Source `
+        -ArgumentList "--port=$port", '--host=127.0.0.1', '--verbose' `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
+        -WindowStyle Hidden -PassThru
+    Wait-Driver
+
+    $session = Invoke-Driver -Method Post -Path '/session' -Body @{
+        capabilities = @{
+            alwaysMatch = @{
+                browserName = 'webview2'
+                'ms:edgeChromium' = $true
+                'ms:edgeOptions' = @{
+                    binary = $resolvedBinary
+                    args = @()
+                    webviewOptions = @{ userDataFolder = $webviewData }
+                }
+            }
+        }
+    }
+    $script:sessionId = $session.value.sessionId
+    if (-not $script:sessionId) { $script:sessionId = $session.sessionId }
+    if (-not $script:sessionId) { throw 'WebDriver did not return a session id.' }
+}
+
+function Stop-DriverSession {
+    if ($script:sessionId) {
+        try { Invoke-Driver -Method Delete -Path "/session/$script:sessionId" | Out-Null } catch {}
+        $script:sessionId = $null
+    }
+    if ($script:driver -and -not $script:driver.HasExited) {
+        Stop-Process -Id $script:driver.Id -Force -ErrorAction SilentlyContinue
+        $script:driver.WaitForExit(5000) | Out-Null
+    }
+    $script:driver = $null
+}
+
+function Find-CairnProcess {
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $process = Get-Process -Name 'cairn-md' -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    [string]::Equals($_.Path, $resolvedBinary, [StringComparison]::OrdinalIgnoreCase)
+                } catch {
+                    $false
+                }
+            } |
+            Select-Object -First 1
+        if ($process) { return $process }
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'The Cairn.md desktop process was not found.'
+}
+
+function Wait-File {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Description,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $Path) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "$Description was not available within $TimeoutSeconds seconds."
 }
 
 function Find-Element {
@@ -117,52 +193,73 @@ function Wait-ElementText {
 }
 
 try {
-    New-Item -ItemType Directory -Path $appData, $libraryRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $appData, $libraryRoot, $isolatedLocalAppData -Force | Out-Null
+    $env:LOCALAPPDATA = $isolatedLocalAppData
     $env:CAIRN_WEBDRIVER_MODE = '1'
     $env:CAIRN_APP_DATA_DIR = $appData
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
     $env:TAURI_WEBVIEW_AUTOMATION = 'true'
-
-    $driver = Start-Process -FilePath $driverCommand.Source `
-        -ArgumentList "--port=$port", '--host=127.0.0.1', '--verbose' `
-        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
-        -WindowStyle Hidden -PassThru
-    Wait-Driver
-
-    $session = Invoke-Driver -Method Post -Path '/session' -Body @{
-        capabilities = @{
-            alwaysMatch = @{
-                browserName = 'webview2'
-                'ms:edgeChromium' = $true
-                'ms:edgeOptions' = @{
-                    binary = $resolvedBinary
-                    args = @()
-                    webviewOptions = @{ userDataFolder = $webviewData }
-                }
-            }
-        }
+    if ($Scenario -eq 'recovery') {
+        $env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH = $saveBarrierPath
     }
-    $sessionId = $session.value.sessionId
-    if (-not $sessionId) { $sessionId = $session.sessionId }
-    if (-not $sessionId) { throw 'WebDriver did not return a session id.' }
+
+    Start-DriverSession
 
     Find-Element -Using 'css selector' -Value '.desktop-shell' | Out-Null
     $createProject = Find-Element -Using 'css selector' -Value 'button[aria-label="Create project"]'
     Click-Element -ElementId $createProject
-    Set-PromptText -Text 'WebDriver Project'
-    Find-Element -Using 'xpath' -Value "//nav[@aria-label='Projects']//button[.//span[normalize-space()='WebDriver Project']]" | Out-Null
+    $projectName = if ($Scenario -eq 'recovery') { 'Recovery Project' } else { 'WebDriver Project' }
+    $documentName = if ($Scenario -eq 'recovery') { 'recovery-proof.md' } else { 'desktop-proof.md' }
+    Set-PromptText -Text $projectName
+    Find-Element -Using 'xpath' -Value "//nav[@aria-label='Projects']//button[.//span[normalize-space()='$projectName']]" | Out-Null
 
     $newDocument = Find-Element -Using 'xpath' -Value "//button[normalize-space()='New document']"
     Click-Element -ElementId $newDocument
-    Set-PromptText -Text 'desktop-proof.md'
-    Wait-ElementText -Using 'css selector' -Value '.document-header h2' -Expected 'desktop-proof.md' | Out-Null
+    Set-PromptText -Text $documentName
+    Wait-ElementText -Using 'css selector' -Value '.document-header h2' -Expected $documentName | Out-Null
 
     $visualEditor = Find-Element -Using 'css selector' -Value '.visual-segment .ProseMirror[contenteditable="true"]' -TimeoutSeconds 30
-    Send-Text -ElementId $visualEditor -Text 'Edited in the real Cairn.md desktop window.'
-    Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Saved' -TimeoutSeconds 30 | Out-Null
+    $expectedText = if ($Scenario -eq 'recovery') {
+        'Recovered after forced termination in the real Cairn.md desktop window.'
+    } else {
+        'Edited in the real Cairn.md desktop window.'
+    }
+    Send-Text -ElementId $visualEditor -Text $expectedText
 
-    $documentRow = Find-Element -Using 'xpath' -Value "//*[@role='option' and .//span[normalize-space()='desktop-proof.md']]"
-    $editorHeading = Wait-ElementText -Using 'css selector' -Value '.document-header h2' -Expected 'desktop-proof.md'
+    if ($Scenario -eq 'recovery') {
+        $acknowledgedAt = [DateTime]::UtcNow
+        Wait-File -Path $saveBarrierPath -Description 'The durable recovery save barrier' -TimeoutSeconds 30
+        Start-Sleep -Milliseconds 1000
+        $appProcess = Find-CairnProcess
+        $termination = Start-Process -FilePath 'taskkill.exe' `
+            -ArgumentList '/PID', $appProcess.Id, '/T', '/F' `
+            -Wait -PassThru -WindowStyle Hidden
+        if ($termination.ExitCode -ne 0) {
+            throw "Forced termination exited with code $($termination.ExitCode)."
+        }
+        $appProcess.WaitForExit(10000) | Out-Null
+        $terminationLag = [DateTime]::UtcNow - $acknowledgedAt
+        if ($terminationLag.TotalSeconds -gt 2) {
+            throw "Forced termination exceeded the two-second recovery window: $([math]::Round($terminationLag.TotalMilliseconds)) ms"
+        }
+
+        Stop-DriverSession
+        Remove-Item Env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $saveBarrierPath -Force -ErrorAction SilentlyContinue
+        Start-DriverSession
+        Find-Element -Using 'css selector' -Value '.desktop-shell' | Out-Null
+        $documentRow = Find-Element -Using 'xpath' -Value "//*[@role='option' and .//span[normalize-space()='$documentName']]"
+        Click-Element -ElementId $documentRow
+        Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Recovered' -TimeoutSeconds 30 | Out-Null
+        $keepRecovery = Find-Element -Using 'xpath' -Value "//button[normalize-space()='Keep recovered changes']"
+        Click-Element -ElementId $keepRecovery
+        Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Saved' -TimeoutSeconds 30 | Out-Null
+    } else {
+        Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Saved' -TimeoutSeconds 30 | Out-Null
+    }
+
+    $documentRow = Find-Element -Using 'xpath' -Value "//*[@role='option' and .//span[normalize-space()='$documentName']]"
+    $editorHeading = Wait-ElementText -Using 'css selector' -Value '.document-header h2' -Expected $documentName
     if (-not $documentRow -or -not $editorHeading) {
         throw 'The contents list and editor were not simultaneously available.'
     }
@@ -171,22 +268,26 @@ try {
     Click-Element -ElementId $sourceButton
     $sourceEditor = Find-Element -Using 'css selector' -Value '.source-editor .cm-content[contenteditable="true"]' -TimeoutSeconds 30
     $sourceText = Get-ElementText -ElementId $sourceEditor
-    if ($sourceText -notlike '*Edited in the real Cairn.md desktop window.*') {
+    if ($sourceText -notlike "*$expectedText*") {
         throw "Source mode did not contain the visual edit. Actual text: $sourceText"
     }
 
-    $savedPath = Join-Path (Join-Path $libraryRoot 'WebDriver Project') 'desktop-proof.md'
+    $savedPath = Join-Path (Join-Path $libraryRoot $projectName) $documentName
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $savedPath)) {
         Start-Sleep -Milliseconds 150
     }
     if (-not (Test-Path -LiteralPath $savedPath)) { throw 'Autosave did not create the Markdown file.' }
     $savedText = Get-Content -LiteralPath $savedPath -Raw
-    if ($savedText -notlike '*Edited in the real Cairn.md desktop window.*') {
+    if ($savedText -notlike "*$expectedText*") {
         throw 'The saved Markdown file did not contain the visual edit.'
     }
 
-    Write-Host 'Desktop flow passed: project, document, visual edit, autosave, source mode, and persistent contents navigation.'
+    if ($Scenario -eq 'recovery') {
+        Write-Host "Recovery flow passed: forced termination after $([math]::Round($terminationLag.TotalMilliseconds)) ms preserved the acknowledged edit and returned to Saved."
+    } else {
+        Write-Host 'Desktop flow passed: project, document, visual edit, autosave, source mode, and persistent contents navigation.'
+    }
 } catch {
     Write-Warning "Desktop flow failed: $($_.Exception.Message)"
     if (Test-Path -LiteralPath $stdoutPath) {
@@ -199,17 +300,14 @@ try {
     }
     throw
 } finally {
-    if ($sessionId) {
-        try { Invoke-Driver -Method Delete -Path "/session/$sessionId" | Out-Null } catch {}
-    }
-    if ($driver -and -not $driver.HasExited) {
-        Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
-        $driver.WaitForExit(5000) | Out-Null
-    }
+    Stop-DriverSession
     Remove-Item Env:CAIRN_WEBDRIVER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_LIBRARY_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $saveBarrierPath -Force -ErrorAction SilentlyContinue
+    $env:LOCALAPPDATA = $originalLocalAppData
     $resolvedBase = [IO.Path]::GetFullPath($testBase)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if ($resolvedBase.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and
