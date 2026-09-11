@@ -84,7 +84,7 @@ jobs:
             installedMemoryBytes = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
           } | ConvertTo-Json | Set-Content performance-results\environment.json
       - name: Enforce release performance contract
-        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
+        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
       - name: Validate installed release workflow
         shell: pwsh
         run: |

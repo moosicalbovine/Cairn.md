@@ -269,10 +269,10 @@ function parseOptions(args: readonly string[]): BenchmarkOptions {
   const binary = args[0];
   if (!binary) {
     throw new Error(
-      "Usage: npm run perf -- <cairn-md.exe> [--samples 20] [--idle-seconds 60] [--output path]",
+      "Usage: npm run perf -- <cairn-md.exe> [--samples 40] [--idle-seconds 60] [--output path]",
     );
   }
-  let samples = 20;
+  let samples = 40;
   let idleSeconds = 60;
   let outputPath: string | null = null;
   for (let index = 1; index < args.length; index += 2) {

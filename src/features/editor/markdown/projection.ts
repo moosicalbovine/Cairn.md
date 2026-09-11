@@ -33,7 +33,7 @@ interface SourceRange {
 }
 
 const unsupportedNodeTypes = new Set(["html"]);
-const visualSegmentTargetCharacters = 32 * 1024;
+const visualSegmentTargetCharacters = 16 * 1024;
 
 function nodeRange(node: PositionedNode): SourceRange | undefined {
   const from = node.position?.start?.offset;

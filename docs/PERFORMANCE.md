@@ -36,10 +36,10 @@ Build the release binary, then run at least 20 independent launches:
 
 ```powershell
 npm run tauri build
-npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
+npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
 ```
 
-Each run uses isolated app metadata and never opens the user's library. The harness measures from process creation until a real Milkdown editor has painted and accepted input, stops the startup clock before gathering diagnostic process data, closes the full process tree between startup samples, records 20 real visual-editor opens and edits through the next painted frame, and measures the sum of the process tree's private working sets after the idle interval. The raw report also records aggregate working set for diagnosis. A non-zero exit means at least one enforced threshold failed.
+Each run uses isolated app metadata and never opens the user's library. The harness measures 40 independent launches from process creation until a real Milkdown editor has painted and accepted input, stops the startup clock before gathering diagnostic process data, closes the full process tree between startup samples, records 20 real visual-editor opens and edits through the next painted frame, and measures the sum of the process tree's private working sets after the idle interval. Forty startup samples make the p95 estimate less sensitive to one-off hosted-runner provisioning noise while retaining every valid sample. The raw report also records aggregate working set for diagnosis. A non-zero exit means at least one enforced threshold failed.
 
 ## Stress coverage
 

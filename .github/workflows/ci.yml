@@ -111,7 +111,7 @@ jobs:
             storageMediaType = $storageMediaType
           } | ConvertTo-Json | Set-Content performance-results\environment.json
       - name: Measure release performance
-        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
+        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
       - name: Validate current-user installer
         id: installer-smoke
         if: always()
