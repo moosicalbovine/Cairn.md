@@ -1,24 +1,24 @@
 import { editorViewCtx } from "@milkdown/kit/core";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import {
-  getPerformanceFixturePaths,
   getPerformanceScenario,
   markPerformanceReady,
   writePerformanceReport,
 } from "../../lib/tauri/performance";
-import { addTrackedFolder } from "../../lib/tauri/import";
-import { bindLibraryRoot, type LibrarySnapshot } from "../../lib/tauri/library";
 import { MarkdownSession } from "../editor/session/MarkdownSession";
 import { VisualSession } from "../editor/visual/VisualSession";
 import {
   createVisualSegmentEditor,
   type VisualSegmentEditorHandle,
 } from "../editor/visual/createVisualSegmentEditor";
-import { Workspace } from "../library/components/Workspace";
-import type { TrackedFolderSnapshot } from "../../lib/tauri/import";
-import type { Appearance } from "../settings/appearance/appearance";
 import { normalPerformanceDocument } from "./normalDocument";
+
+const InstalledSmokeRunner = lazy(() =>
+  import("./InstalledSmokeRunner").then((module) => ({
+    default: module.InstalledSmokeRunner,
+  })),
+);
 
 const sampleCount = 20;
 
@@ -44,11 +44,7 @@ export function PerformanceRunner() {
   const primaryHost = useRef<HTMLDivElement>(null);
   const scratchHost = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("Preparing release measurements…");
-  const [workspace, setWorkspace] = useState<{
-    snapshot: LibrarySnapshot;
-    trackedFolders: readonly TrackedFolderSnapshot[];
-  } | null>(null);
-  const [appearance, setAppearance] = useState<Appearance>("followWindows");
+  const [installedSmoke, setInstalledSmoke] = useState(false);
 
   useEffect(() => {
     const primaryParent = primaryHost.current;
@@ -60,14 +56,8 @@ export function PerformanceRunner() {
     void (async () => {
       try {
         const scenario = await getPerformanceScenario();
-        if (scenario === "workspace") {
-          const paths = await getPerformanceFixturePaths();
-          const snapshot = await bindLibraryRoot(paths.libraryRoot);
-          const trackedFolder = await addTrackedFolder(paths.trackedRoot);
-          if (!active) return;
-          setWorkspace({ snapshot, trackedFolders: [trackedFolder] });
-          await afterPaint();
-          if (active) await markPerformanceReady();
+        if (scenario === "installed") {
+          if (active) setInstalledSmoke(true);
           return;
         }
         const source = normalPerformanceDocument();
@@ -127,14 +117,11 @@ export function PerformanceRunner() {
     };
   }, []);
 
-  if (workspace) {
+  if (installedSmoke) {
     return (
-      <Workspace
-        initialSnapshot={workspace.snapshot}
-        initialTrackedFolders={workspace.trackedFolders}
-        appearance={appearance}
-        onAppearanceChange={setAppearance}
-      />
+      <Suspense fallback={<main className="startup-screen">Preparing installed workflow check…</main>}>
+        <InstalledSmokeRunner />
+      </Suspense>
     );
   }
 

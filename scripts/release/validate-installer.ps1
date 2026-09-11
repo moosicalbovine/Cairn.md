@@ -7,10 +7,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $testRoot = Join-Path $env:TEMP ("cairn-installer-validation-" + [guid]::NewGuid())
+$appData = Join-Path $testRoot 'app-data'
 $library = Join-Path $testRoot 'user-library'
-New-Item -ItemType Directory -Force -Path $library | Out-Null
-$sentinel = Join-Path $library 'keep-me.md'
-Set-Content -LiteralPath $sentinel -Value '# User-owned library content' -NoNewline
+$tracked = Join-Path $testRoot 'tracked-source'
+$report = Join-Path $testRoot 'installed-workflow.json'
+$ready = "$report.ready"
+New-Item -ItemType Directory -Force -Path $appData, $library, $tracked | Out-Null
+$trackedSource = Join-Path $tracked 'tracked-proof.md'
+Set-Content -LiteralPath $trackedSource -Value '# Original tracked file remains unchanged.' -NoNewline
+$applicationProcess = $null
 $uninstaller = $null
 $uninstallAttempted = $false
 
@@ -85,15 +90,51 @@ try {
     if ($null -eq $application) {
         throw 'The installed Cairn.md executable is missing'
     }
-    $desktopFlow = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\test\desktop-flow.ps1')).Path
-    & $desktopFlow -BinaryPath $application.FullName -Scenario workspace -InstalledRelease
+    $env:CAIRN_PERF_MODE = '1'
+    $env:CAIRN_PERF_SCENARIO = 'installed'
+    $env:CAIRN_PERF_OUTPUT = $report
+    $env:CAIRN_PERF_LIBRARY_ROOT = $library
+    $env:CAIRN_PERF_TRACKED_ROOT = $tracked
+    $env:CAIRN_APP_DATA_DIR = $appData
+    $applicationProcess = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    while (-not (Test-Path -LiteralPath $ready) -and [DateTime]::UtcNow -lt $deadline) {
+        if ($applicationProcess.HasExited) {
+            throw "Installed Cairn.md exited with code $($applicationProcess.ExitCode) before completing its workflow"
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not (Test-Path -LiteralPath $ready) -or -not (Test-Path -LiteralPath $report)) {
+        throw 'Installed Cairn.md did not complete its workflow within 45 seconds'
+    }
+    $workflow = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+    if ($workflow.benchmark -ne 'cairn-installed-workflow' -or $workflow.passed -ne $true) {
+        $failedChecks = @($workflow.checks.psobject.Properties | Where-Object { $_.Value -ne $true } | ForEach-Object { $_.Name })
+        throw "Installed Cairn.md workflow failed: $($failedChecks -join ', ')"
+    }
+    $termination = Start-Process -FilePath 'taskkill.exe' `
+        -ArgumentList '/PID', $applicationProcess.Id, '/T', '/F' `
+        -Wait -PassThru -WindowStyle Hidden
+    if ($termination.ExitCode -ne 0) {
+        throw "Installed Cairn.md could not be stopped after validation (code $($termination.ExitCode))"
+    }
+    $applicationProcess.WaitForExit(10000) | Out-Null
+
+    $savedDocument = Join-Path (Join-Path $library 'Installed Project') 'installed-proof.md'
+    if (-not (Test-Path -LiteralPath $savedDocument) -or
+        (Get-Content -LiteralPath $savedDocument -Raw) -notlike '*Edited through the installed Cairn.md visual editor.*') {
+        throw 'The installed workflow did not leave the expected autosaved Markdown file'
+    }
+    if ((Get-Content -LiteralPath $trackedSource -Raw) -ne '# Original tracked file remains unchanged.') {
+        throw 'The installed workflow changed the original tracked Markdown file'
+    }
 
     $uninstallAttempted = $true
     $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
     if ($uninstall.ExitCode -ne 0) {
         throw "Uninstaller exited with code $($uninstall.ExitCode)"
     }
-    if (-not (Test-Path -LiteralPath $sentinel)) {
+    if (-not (Test-Path -LiteralPath $savedDocument)) {
         throw 'Uninstall removed user-owned library content'
     }
     if (Test-Path -LiteralPath $application.FullName) {
@@ -105,9 +146,20 @@ try {
     Write-Output "Cairn.md $ExpectedVersion installer validation passed"
 }
 finally {
+    if ($null -ne $applicationProcess -and -not $applicationProcess.HasExited) {
+        Start-Process -FilePath 'taskkill.exe' `
+            -ArgumentList '/PID', $applicationProcess.Id, '/T', '/F' `
+            -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
+    }
     if (-not $uninstallAttempted -and $null -ne $uninstaller -and (Test-Path -LiteralPath $uninstaller)) {
         Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
     }
+    Remove-Item Env:CAIRN_PERF_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_SCENARIO -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_OUTPUT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_LIBRARY_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_PERF_TRACKED_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
     $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
     $resolvedTempRoot = [IO.Path]::GetFullPath($env:TEMP)
     if ($resolvedTestRoot.StartsWith($resolvedTempRoot, [StringComparison]::OrdinalIgnoreCase) -and

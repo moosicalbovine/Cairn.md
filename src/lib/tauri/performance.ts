@@ -10,13 +10,22 @@ export type PerformanceFixturePaths = Readonly<{
   trackedRoot: string;
 }>;
 
+export type InstalledSmokeReport = Readonly<{
+  projectCreated: boolean;
+  trackedImport: boolean;
+  visualEdit: boolean;
+  sourceMode: boolean;
+  autosave: boolean;
+  message: string;
+}>;
+
 export function isPerformanceMode(): Promise<boolean> {
   return invoke<boolean>("performance_mode");
 }
 
-export async function getPerformanceScenario(): Promise<"full" | "idle" | "workspace"> {
+export async function getPerformanceScenario(): Promise<"full" | "idle" | "installed"> {
   const value = await invoke<unknown>("performance_scenario");
-  if (value !== "full" && value !== "idle" && value !== "workspace") {
+  if (value !== "full" && value !== "idle" && value !== "installed") {
     throw new Error("Invalid performance scenario");
   }
   return value;
@@ -45,4 +54,8 @@ export function markPerformanceReady(): Promise<void> {
 
 export function writePerformanceReport(report: BrowserPerformanceReport): Promise<void> {
   return invoke<void>("write_performance_report", { report });
+}
+
+export function writeInstalledSmokeReport(report: InstalledSmokeReport): Promise<void> {
+  return invoke<void>("write_installed_smoke_report", { report });
 }

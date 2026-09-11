@@ -120,6 +120,7 @@ pub fn run() {
             commands::performance::performance_fixture_paths,
             commands::performance::mark_performance_ready,
             commands::performance::write_performance_report,
+            commands::performance::write_installed_smoke_report,
         ])
         .run(tauri::generate_context!())
         .expect("Cairn.md desktop core failed to start");

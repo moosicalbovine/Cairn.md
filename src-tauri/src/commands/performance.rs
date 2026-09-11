@@ -24,6 +24,18 @@ pub struct PerformanceFixturePaths {
     tracked_root: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSmokeReport {
+    project_created: bool,
+    tracked_import: bool,
+    visual_edit: bool,
+    source_mode: bool,
+    autosave: bool,
+    #[serde(default)]
+    message: String,
+}
+
 fn performance_output() -> Result<PathBuf, String> {
     if !performance_mode() {
         return Err("Performance reporting is disabled".to_owned());
@@ -62,7 +74,7 @@ pub fn performance_mode() -> bool {
 pub fn performance_scenario() -> &'static str {
     match std::env::var(PERFORMANCE_SCENARIO).as_deref() {
         Ok("idle") => "idle",
-        Ok("workspace") => "workspace",
+        Ok("installed") => "installed",
         _ => "full",
     }
 }
@@ -70,7 +82,7 @@ pub fn performance_scenario() -> &'static str {
 fn fixture_path(name: &str) -> Result<PathBuf, String> {
     let value = std::env::var_os(name)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} is required for the workspace fixture"))?;
+        .ok_or_else(|| format!("{name} is required for the installed fixture"))?;
     absolute_fixture_path(value, name)
 }
 
@@ -84,8 +96,8 @@ fn absolute_fixture_path(value: OsString, name: &str) -> Result<PathBuf, String>
 
 #[tauri::command]
 pub fn performance_fixture_paths() -> Result<PerformanceFixturePaths, String> {
-    if !performance_mode() || performance_scenario() != "workspace" {
-        return Err("The workspace fixture is disabled".to_owned());
+    if !performance_mode() || performance_scenario() != "installed" {
+        return Err("The installed fixture is disabled".to_owned());
     }
     let library_root = fixture_path(PERFORMANCE_LIBRARY_ROOT)?;
     let tracked_root = fixture_path(PERFORMANCE_TRACKED_ROOT)?;
@@ -96,6 +108,15 @@ pub fn performance_fixture_paths() -> Result<PerformanceFixturePaths, String> {
         library_root,
         tracked_root,
     })
+}
+
+fn installed_checks_pass(report: &InstalledSmokeReport, original_source_unchanged: bool) -> bool {
+    report.project_created
+        && report.tracked_import
+        && report.visual_edit
+        && report.source_mode
+        && report.autosave
+        && original_source_unchanged
 }
 
 #[tauri::command]
@@ -117,11 +138,49 @@ pub fn write_performance_report(report: BrowserPerformanceReport) -> Result<(), 
     fs::write(output, bytes).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub fn write_installed_smoke_report(report: InstalledSmokeReport) -> Result<(), String> {
+    if !performance_mode() || performance_scenario() != "installed" {
+        return Err("Installed workflow reporting is disabled".to_owned());
+    }
+    let paths = performance_fixture_paths()?;
+    let original_source_unchanged = fs::read(paths.tracked_root.join("tracked-proof.md"))
+        .is_ok_and(|bytes| bytes == b"# Original tracked file remains unchanged.");
+    let passed = installed_checks_pass(&report, original_source_unchanged);
+    let output = performance_output()?;
+    let value = serde_json::json!({
+        "benchmark": "cairn-installed-workflow",
+        "checks": {
+            "projectCreated": report.project_created,
+            "trackedImport": report.tracked_import,
+            "originalSourceUnchanged": original_source_unchanged,
+            "visualEdit": report.visual_edit,
+            "sourceMode": report.source_mode,
+            "autosave": report.autosave,
+        },
+        "passed": passed,
+    });
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())?;
+    fs::write(&output, bytes).map_err(|error| error.to_string())?;
+    fs::write(ready_path(&output), b"ready").map_err(|error| error.to_string())?;
+    if passed {
+        Ok(())
+    } else {
+        Err(if report.message.is_empty() {
+            "Installed workflow checks failed".to_owned()
+        } else {
+            report.message
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
 
-    use super::{absolute_fixture_path, validate_samples};
+    use super::{
+        absolute_fixture_path, installed_checks_pass, validate_samples, InstalledSmokeReport,
+    };
 
     #[test]
     fn performance_reports_require_twenty_valid_samples() {
@@ -135,5 +194,20 @@ mod tests {
     #[test]
     fn fixture_paths_must_be_absolute() {
         assert!(absolute_fixture_path(OsString::from("relative"), "fixture").is_err());
+    }
+
+    #[test]
+    fn installed_report_requires_every_check_and_the_original_source() {
+        let report = InstalledSmokeReport {
+            project_created: true,
+            tracked_import: true,
+            visual_edit: true,
+            source_mode: true,
+            autosave: true,
+            message: String::new(),
+        };
+
+        assert!(installed_checks_pass(&report, true));
+        assert!(!installed_checks_pass(&report, false));
     }
 }
