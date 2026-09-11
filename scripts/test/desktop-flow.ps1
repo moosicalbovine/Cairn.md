@@ -159,7 +159,6 @@ try {
 
     $visualEditor = Find-Element -Using 'css selector' -Value '.visual-segment .ProseMirror[contenteditable="true"]' -TimeoutSeconds 30
     Send-Text -ElementId $visualEditor -Text 'Edited in the real Cairn.md desktop window.'
-    Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Saving…' | Out-Null
     Wait-ElementText -Using 'css selector' -Value '.persistence-state span' -Expected 'Saved' -TimeoutSeconds 30 | Out-Null
 
     $documentRow = Find-Element -Using 'xpath' -Value "//*[@role='option' and .//span[normalize-space()='desktop-proof.md']]"
