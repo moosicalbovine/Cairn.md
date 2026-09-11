@@ -5,11 +5,11 @@ use crate::domain::library::{DocumentContent, DocumentSnapshot, LibraryError};
 use crate::domain::recovery::{RecoverySnapshot, RecoverySnapshotRequest, SaveDocumentResult};
 
 #[cfg(debug_assertions)]
-fn wait_for_webdriver_save_barrier() -> Result<(), LibraryError> {
+fn wait_for_webdriver_recovery_barrier() -> Result<(), LibraryError> {
     if std::env::var("CAIRN_WEBDRIVER_MODE").as_deref() != Ok("1") {
         return Ok(());
     }
-    let Some(path) = std::env::var_os("CAIRN_WEBDRIVER_SAVE_BARRIER_PATH")
+    let Some(path) = std::env::var_os("CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH")
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
     else {
@@ -21,7 +21,7 @@ fn wait_for_webdriver_save_barrier() -> Result<(), LibraryError> {
         if started.elapsed() >= std::time::Duration::from_secs(60) {
             return Err(LibraryError::new(
                 "webdriver_barrier_timeout",
-                "The WebDriver save barrier was not released",
+                "The WebDriver recovery barrier was not released",
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -34,7 +34,10 @@ pub fn store_recovery_snapshot(
     state: State<'_, LibraryState>,
     request: RecoverySnapshotRequest,
 ) -> Result<RecoverySnapshot, LibraryError> {
-    service(&state)?.store_recovery_snapshot(request)
+    let snapshot = service(&state)?.store_recovery_snapshot(request)?;
+    #[cfg(debug_assertions)]
+    wait_for_webdriver_recovery_barrier()?;
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -59,8 +62,6 @@ pub fn save_document(
     state: State<'_, LibraryState>,
     request: RecoverySnapshotRequest,
 ) -> Result<SaveDocumentResult, LibraryError> {
-    #[cfg(debug_assertions)]
-    wait_for_webdriver_save_barrier()?;
     service(&state)?.save_document(request)
 }
 

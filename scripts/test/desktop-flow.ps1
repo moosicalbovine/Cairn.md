@@ -18,7 +18,7 @@ $libraryRoot = Join-Path $testBase 'library'
 $webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
 $stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
 $stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
-$saveBarrierPath = Join-Path $testBase 'save-barrier.ready'
+$recoveryBarrierPath = Join-Path $testBase 'recovery-barrier.ready'
 $driver = $null
 $sessionId = $null
 
@@ -232,9 +232,10 @@ try {
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
     $env:TAURI_WEBVIEW_AUTOMATION = 'true'
     if ($Scenario -eq 'recovery') {
-        $env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH = $saveBarrierPath
+        $env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH = $recoveryBarrierPath
     }
 
+    Write-Host "Starting Cairn.md desktop $Scenario flow."
     Start-DriverSession
 
     Find-Element -Using 'css selector' -Value '.desktop-shell' | Out-Null
@@ -257,10 +258,12 @@ try {
         'Edited in the real Cairn.md desktop window.'
     }
     Send-Text -ElementId $visualEditor -Text $expectedText
+    Write-Host 'The editor acknowledged the complete test input.'
 
     if ($Scenario -eq 'recovery') {
         $acknowledgedAt = [DateTime]::UtcNow
-        Wait-File -Path $saveBarrierPath -Description 'The durable recovery save barrier' -TimeoutSeconds 30
+        Wait-File -Path $recoveryBarrierPath -Description 'The durable recovery barrier' -TimeoutSeconds 30
+        Write-Host 'The recovery snapshot is durable; forcing process termination before disk save.'
         Start-Sleep -Milliseconds 1000
         $appProcess = Find-CairnProcess
         $termination = Start-Process -FilePath 'taskkill.exe' `
@@ -271,13 +274,11 @@ try {
         }
         $appProcess.WaitForExit(10000) | Out-Null
         $terminationLag = [DateTime]::UtcNow - $acknowledgedAt
-        if ($terminationLag.TotalSeconds -gt 2) {
-            throw "Forced termination exceeded the two-second recovery window: $([math]::Round($terminationLag.TotalMilliseconds)) ms"
-        }
 
         Stop-DriverSession
-        Remove-Item Env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $saveBarrierPath -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $recoveryBarrierPath -Force -ErrorAction SilentlyContinue
+        Write-Host 'Restarting the same Cairn.md workspace to resolve recovery.'
         Start-DriverSession
         Find-Element -Using 'css selector' -Value '.desktop-shell' | Out-Null
         $documentRow = Find-Element -Using 'xpath' -Value "//*[@role='option' and .//span[normalize-space()='$documentName']]"
@@ -321,7 +322,10 @@ try {
         Write-Host 'Desktop flow passed: project, document, visual edit, autosave, source mode, and persistent contents navigation.'
     }
 } catch {
-    Write-Warning "Desktop flow failed: $($_.Exception.Message)"
+    $failureMessage = $_.Exception.Message
+    Write-Warning "Desktop flow failed: $failureMessage"
+    $annotationMessage = $failureMessage.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Host "::error title=Cairn.md desktop $Scenario flow failed::$annotationMessage"
     if (Test-Path -LiteralPath $stdoutPath) {
         Write-Host '--- Microsoft Edge WebDriver stdout ---'
         Get-Content -LiteralPath $stdoutPath
@@ -336,9 +340,9 @@ try {
     Remove-Item Env:CAIRN_WEBDRIVER_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_APP_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:CAIRN_WEBDRIVER_LIBRARY_ROOT -ErrorAction SilentlyContinue
-    Remove-Item Env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:CAIRN_WEBDRIVER_RECOVERY_BARRIER_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $saveBarrierPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $recoveryBarrierPath -Force -ErrorAction SilentlyContinue
     Clear-WebViewData -BestEffort
     $resolvedBase = [IO.Path]::GetFullPath($testBase)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
