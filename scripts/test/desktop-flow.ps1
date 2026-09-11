@@ -13,11 +13,9 @@ $driverCommand = Get-Command 'msedgedriver' -ErrorAction Stop
 $testBase = Join-Path ([IO.Path]::GetTempPath()) ("cairn-webdriver-" + [Guid]::NewGuid().ToString('N'))
 $appData = Join-Path $testBase 'app-data'
 $libraryRoot = Join-Path $testBase 'library'
-$originalLocalAppData = $env:LOCALAPPDATA
-$isolatedLocalAppData = Join-Path $testBase 'local-app-data'
 # Tauri forces an unconfigured WebView data directory to LOCALAPPDATA/<identifier>.
 # Keep this identifier aligned with tauri.webdriver.conf.json so EdgeDriver can attach.
-$webviewData = Join-Path $isolatedLocalAppData $webviewIdentifier
+$webviewData = Join-Path $env:LOCALAPPDATA $webviewIdentifier
 $stdoutPath = Join-Path $testBase 'edge-driver.stdout.log'
 $stderrPath = Join-Path $testBase 'edge-driver.stderr.log'
 $saveBarrierPath = Join-Path $testBase 'save-barrier.ready'
@@ -53,6 +51,40 @@ function Wait-Driver {
         }
     }
     throw 'Microsoft Edge WebDriver did not become ready within 30 seconds.'
+}
+
+function Clear-WebViewData {
+    param([switch]$BestEffort)
+
+    $resolvedProfile = [IO.Path]::GetFullPath($webviewData)
+    $resolvedLocalAppData = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
+    $expectedProfile = [IO.Path]::GetFullPath(
+        [IO.Path]::Combine($resolvedLocalAppData, $webviewIdentifier)
+    )
+    if (-not [string]::Equals(
+        $resolvedProfile,
+        $expectedProfile,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Refusing to clear an unexpected WebView2 profile path: $resolvedProfile"
+    }
+    if (-not (Test-Path -LiteralPath $resolvedProfile)) { return }
+
+    for ($attempt = 0; $attempt -lt 10; $attempt += 1) {
+        try {
+            Remove-Item -LiteralPath $resolvedProfile -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -eq 9) {
+                if ($BestEffort) {
+                    Write-Warning "Could not clear the dedicated WebView2 test profile: $resolvedProfile"
+                    return
+                }
+                throw
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
 
 function Start-DriverSession {
@@ -193,8 +225,8 @@ function Wait-ElementText {
 }
 
 try {
-    New-Item -ItemType Directory -Path $appData, $libraryRoot, $isolatedLocalAppData -Force | Out-Null
-    $env:LOCALAPPDATA = $isolatedLocalAppData
+    New-Item -ItemType Directory -Path $appData, $libraryRoot -Force | Out-Null
+    Clear-WebViewData
     $env:CAIRN_WEBDRIVER_MODE = '1'
     $env:CAIRN_APP_DATA_DIR = $appData
     $env:CAIRN_WEBDRIVER_LIBRARY_ROOT = $libraryRoot
@@ -307,7 +339,7 @@ try {
     Remove-Item Env:CAIRN_WEBDRIVER_SAVE_BARRIER_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_WEBVIEW_AUTOMATION -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $saveBarrierPath -Force -ErrorAction SilentlyContinue
-    $env:LOCALAPPDATA = $originalLocalAppData
+    Clear-WebViewData -BestEffort
     $resolvedBase = [IO.Path]::GetFullPath($testBase)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if ($resolvedBase.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and
