@@ -12,16 +12,9 @@ import {
   createVisualSegmentEditor,
   type VisualSegmentEditorHandle,
 } from "../editor/visual/createVisualSegmentEditor";
+import { normalPerformanceDocument } from "./normalDocument";
 
 const sampleCount = 20;
-
-function normalDocument(): string {
-  return Array.from(
-    { length: 80 },
-    (_, index) =>
-      `## Section ${index + 1}\n\nParagraph ${index + 1} contains **portable Markdown**, a [link](https://example.com), and enough text for a representative document.`,
-  ).join("\n\n");
-}
 
 async function afterPaint(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -56,7 +49,7 @@ export function PerformanceRunner() {
     void (async () => {
       try {
         const scenario = await getPerformanceScenario();
-        const source = normalDocument();
+        const source = normalPerformanceDocument();
         primary = await openVisualEditor(primaryParent, source);
         await afterPaint();
         if (!active) return;

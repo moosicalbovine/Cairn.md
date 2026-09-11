@@ -9,7 +9,7 @@ Cairn.md v0.1.0 targets a responsive Windows desktop experience without bundling
 | Cold start to an interactive editor | p95 at or below 1.5 seconds | Harness implemented; reference run pending |
 | Editor input to painted frame | p95 at or below 50 ms | Harness implemented; reference run pending |
 | Normal document open | p95 at or below 250 ms | Harness implemented; reference run pending |
-| Idle process-tree working set | Below 150 MB after 60 seconds | Harness implemented; reference run pending |
+| Idle process-tree private working set | Below 150 MB after 60 seconds | Harness implemented; reference run pending |
 | Durable recovery lag | At most 2 seconds | Deterministic autosave tests implemented; process-termination harness pending |
 | Stress integrity | No crash or unintended byte change | 1,000-file reconciliation and 10,000-edit tests implemented |
 
@@ -26,9 +26,9 @@ Commit `212d621` was measured on a four-logical-processor Windows Server 2025 Gi
 | Startup | 1439.1 ms | 3298.5 ms | 8303.9 ms | Failed hosted comparison |
 | Document open | 61.5 ms | 78.7 ms | 80.6 ms | Passed |
 | Input to painted frame | 31.3 ms | 32.1 ms | 32.4 ms | Passed |
-| Idle process-tree working set | 339.5 MB | n/a | n/a | Failed hosted comparison |
+| Idle aggregate working set (pre-correction) | 339.5 MB | n/a | n/a | Diagnostic only |
 
-This run is comparison evidence, not reference-profile sign-off. It also uses the dedicated editor harness rather than the complete production workspace, so startup, idle memory, recovery termination, and stress integrity remain open release-gate work.
+This run is comparison evidence, not reference-profile sign-off. Its startup stopwatch included post-ready PowerShell diagnostics, and its memory value summed shared pages once per WebView2 process. Both measurement errors are corrected in the current harness. The run also uses the dedicated editor harness rather than the complete production workspace, so complete-workspace startup, idle memory, and stress integrity remain open release-gate work.
 
 ## Startup and memory measurement
 
@@ -39,7 +39,7 @@ npm run tauri build
 npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 20 --idle-seconds 60 --output "performance-results\release.json"
 ```
 
-Each run uses isolated app metadata and never opens the user's library. The harness measures from process creation until a real Milkdown editor has painted and accepted input, closes the full process tree between startup samples, records 20 real visual-editor opens and edits through the next painted frame, and measures process-tree working set after the idle interval. A non-zero exit means at least one enforced threshold failed.
+Each run uses isolated app metadata and never opens the user's library. The harness measures from process creation until a real Milkdown editor has painted and accepted input, stops the startup clock before gathering diagnostic process data, closes the full process tree between startup samples, records 20 real visual-editor opens and edits through the next painted frame, and measures the sum of the process tree's private working sets after the idle interval. The raw report also records aggregate working set for diagnosis. A non-zero exit means at least one enforced threshold failed.
 
 ## Stress coverage
 

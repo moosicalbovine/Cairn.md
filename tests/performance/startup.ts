@@ -12,13 +12,22 @@ import { dirname, join, resolve } from "node:path";
 
 type ProcessSample = Readonly<{
   mainWindowHandle: number;
+  processCount: number;
   workingSetBytes: number;
+  privateWorkingSetBytes: number;
 }>;
 
 type StartupSample = Readonly<{
   sample: number;
   startupMs: number;
   initialWorkingSetMb: number;
+  initialPrivateWorkingSetMb: number;
+}>;
+
+type IdleMemorySample = Readonly<{
+  processCount: number;
+  aggregateWorkingSetMb: number;
+  privateWorkingSetMb: number;
 }>;
 
 type BrowserReport = Readonly<{
@@ -56,8 +65,11 @@ function readProcessSample(processId: number, includeDescendants = false): Proce
     includeDescendants
       ? "$cairnAll = @(Get-CimInstance Win32_Process); do { $cairnChildren = @($cairnAll | Where-Object { $cairnIds -contains [int]$_.ParentProcessId } | ForEach-Object { [int]$_.ProcessId } | Where-Object { $cairnIds -notcontains $_ }); $cairnIds += $cairnChildren } while ($cairnChildren.Count -gt 0)"
       : `$cairnIds = @(${processId})`,
-    "$cairnWorkingSet = ($cairnIds | ForEach-Object { (Get-Process -Id $_ -ErrorAction SilentlyContinue).WorkingSet64 } | Measure-Object -Sum).Sum",
-    "@{ mainWindowHandle = $cairnRoot.MainWindowHandle.ToInt64(); workingSetBytes = [double]$cairnWorkingSet } | ConvertTo-Json -Compress",
+    "$cairnProcesses = @($cairnIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } | Where-Object { $null -ne $_ })",
+    "$cairnWorkingSet = ($cairnProcesses | Measure-Object -Property WorkingSet64 -Sum).Sum",
+    "$cairnPerf = @(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $cairnIds -contains [int]$_.IDProcess })",
+    "$cairnPrivateWorkingSet = ($cairnPerf | Measure-Object -Property WorkingSetPrivate -Sum).Sum",
+    "@{ mainWindowHandle = $cairnRoot.MainWindowHandle.ToInt64(); processCount = $cairnProcesses.Count; workingSetBytes = [double]$cairnWorkingSet; privateWorkingSetBytes = [double]$cairnPrivateWorkingSet } | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
     encoding: "utf8",
@@ -69,9 +81,13 @@ function readProcessSample(processId: number, includeDescendants = false): Proce
     typeof parsed !== "object" ||
     parsed === null ||
     !("mainWindowHandle" in parsed) ||
+    !("processCount" in parsed) ||
     !("workingSetBytes" in parsed) ||
+    !("privateWorkingSetBytes" in parsed) ||
     typeof parsed.mainWindowHandle !== "number" ||
-    typeof parsed.workingSetBytes !== "number"
+    typeof parsed.processCount !== "number" ||
+    typeof parsed.workingSetBytes !== "number" ||
+    typeof parsed.privateWorkingSetBytes !== "number"
   ) {
     throw new Error("Windows returned an invalid process sample");
   }
@@ -155,12 +171,16 @@ async function measureStartup(binaryPath: string, sample: number): Promise<Start
   const run = startPerformanceProcess(binaryPath, "idle");
   try {
     await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
+    const readyAt = performance.now();
     const processSample = readProcessSample(run.child.pid ?? -1);
     if (!processSample?.mainWindowHandle) throw new Error("Cairn.md reported ready without a window");
     return {
       sample,
-      startupMs: Number((performance.now() - startedAt).toFixed(1)),
+      startupMs: Number((readyAt - startedAt).toFixed(1)),
       initialWorkingSetMb: Number((processSample.workingSetBytes / 1024 / 1024).toFixed(1)),
+      initialPrivateWorkingSetMb: Number(
+        (processSample.privateWorkingSetBytes / 1024 / 1024).toFixed(1),
+      ),
     };
   } finally {
     stopPerformanceProcess(run);
@@ -197,14 +217,23 @@ async function measureBrowser(binaryPath: string): Promise<BrowserReport> {
   }
 }
 
-async function measureIdle(binaryPath: string, idleSeconds: number): Promise<number> {
+async function measureIdle(
+  binaryPath: string,
+  idleSeconds: number,
+): Promise<IdleMemorySample> {
   const run = startPerformanceProcess(binaryPath, "idle");
   try {
     await waitForFile(run, run.readyPath, startupTimeoutMs, "the interactive-ready signal");
     await delay(idleSeconds * 1_000);
     const sample = readProcessSample(run.child.pid ?? -1, true);
     if (!sample) throw new Error("Cairn.md exited before the idle-memory sample");
-    return Number((sample.workingSetBytes / 1024 / 1024).toFixed(1));
+    return {
+      processCount: sample.processCount,
+      aggregateWorkingSetMb: Number((sample.workingSetBytes / 1024 / 1024).toFixed(1)),
+      privateWorkingSetMb: Number(
+        (sample.privateWorkingSetBytes / 1024 / 1024).toFixed(1),
+      ),
+    };
   } finally {
     stopPerformanceProcess(run);
   }
@@ -266,7 +295,7 @@ async function run(options: BenchmarkOptions): Promise<void> {
     startup.push(await measureStartup(options.binaryPath, sample));
   }
   const browser = await measureBrowser(options.binaryPath);
-  const idleWorkingSetMb = await measureIdle(options.binaryPath, options.idleSeconds);
+  const idleMemorySample = await measureIdle(options.binaryPath, options.idleSeconds);
   const startupSummary = metricSummary(
     startup.map((sample) => sample.startupMs),
     startupLimitMs,
@@ -274,10 +303,13 @@ async function run(options: BenchmarkOptions): Promise<void> {
   const documentOpen = metricSummary(browser.documentOpenMs, documentOpenLimitMs);
   const inputLatency = metricSummary(browser.inputLatencyMs, inputLatencyLimitMs);
   const idleMemory = {
-    value: idleWorkingSetMb,
+    value: idleMemorySample.privateWorkingSetMb,
+    aggregateWorkingSetMb: idleMemorySample.aggregateWorkingSetMb,
+    processCount: idleMemorySample.processCount,
     idleSeconds: options.idleSeconds,
     limit: idleMemoryLimitMb,
-    passed: idleWorkingSetMb < idleMemoryLimitMb,
+    measurement: "sum of per-process private working sets",
+    passed: idleMemorySample.privateWorkingSetMb < idleMemoryLimitMb,
   };
   const summary = {
     benchmark: "cairn-release-performance",
