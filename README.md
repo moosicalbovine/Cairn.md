@@ -10,7 +10,7 @@ Cairn.md is a lightweight Windows desktop application for collecting, organizing
 
 Markdown files increasingly arrive through email, Microsoft Teams, SharePoint folders, and AI tools. Native viewers make them easy to read once, but difficult to rediscover, organize, edit, and version later.
 
-Cairn.md will provide a personal managed library that keeps Markdown files easy to find and work with while preserving clean, portable `.md` files.
+Cairn.md provides a personal managed library that keeps Markdown files easy to find and work with while preserving clean, portable `.md` files.
 
 ## v0.1.0 — MVP (current)
 

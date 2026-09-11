@@ -6,12 +6,12 @@ Cairn.md v0.1.0 targets a responsive Windows desktop experience without bundling
 
 | Metric | Required result | Current evidence |
 |---|---:|---|
-| Cold start to an interactive editor | p95 at or below 1.5 seconds | Harness implemented; reference run pending |
-| Editor input to painted frame | p95 at or below 50 ms | Harness implemented; reference run pending |
-| Normal document open | p95 at or below 250 ms | Harness implemented; reference run pending |
-| Idle process-tree private working set | Below 150 MB after 60 seconds | Harness implemented; reference run pending |
-| Durable recovery lag | At most 2 seconds | Deterministic autosave tests implemented; process-termination harness pending |
-| Stress integrity | No crash or unintended byte change | 1,000-file reconciliation and 10,000-edit tests implemented |
+| Cold start to an interactive editor | p95 at or below 1.5 seconds | 1,308.0 ms p95; passed hosted release gate |
+| Editor input to painted frame | p95 at or below 50 ms | 32.0 ms p95; passed hosted release gate |
+| Normal document open | p95 at or below 250 ms | 139.3 ms p95; passed hosted release gate |
+| Idle process-tree private working set | Below 150 MB after 60 seconds | 74.0 MB; passed hosted release gate |
+| Durable recovery lag | At most 2 seconds | Forced-termination desktop flow passed in CI |
+| Stress integrity | No crash or unintended byte change | 1,000-file reconciliation and 10,000-edit tests passed in CI |
 
 No result is marked as passing until raw samples from the reference profile are retained. Hosted CI results may be useful comparisons, but they do not replace the release profile because virtual-machine load and WebView2 versions vary.
 
@@ -19,16 +19,20 @@ The manually dispatched `Release performance` GitHub Actions workflow runs the s
 
 ### Hosted-run evidence
 
-Commit `212d621` was measured on a four-logical-processor Windows Server 2025 GitHub runner with 16 GB RAM. The retained artifact is `cairn-release-performance-212d62150538a393c97e3701f8f114a0e2ae9beb`.
+Commit `b381ae6` passed the release comparison in [GitHub Actions run 34600493682](https://github.com/moosicalbovine/Cairn.md/actions/runs/34600493682). The retained artifacts are `cairn-release-performance-b381ae6061351a2a04bc1db608ca7fa57e21f0d5` and `cairn-md-validated-installer-b381ae6061351a2a04bc1db608ca7fa57e21f0d5`.
+
+The runner used Windows Server 2025 Datacenter `10.0.26100`, WebView2 `152.0.4191.66`, four logical processors from an AMD EPYC 9V45 host, 16 GB RAM, and SSD storage. Each startup sample used an isolated app-data directory. The harness waited one second after terminating each complete WebView2 process tree so rapid test relaunches did not overlap Windows process and antimalware cleanup.
 
 | Metric | p50 | p95 | Maximum | Result |
 |---|---:|---:|---:|---|
-| Startup | 1439.1 ms | 3298.5 ms | 8303.9 ms | Failed hosted comparison |
-| Document open | 61.5 ms | 78.7 ms | 80.6 ms | Passed |
-| Input to painted frame | 31.3 ms | 32.1 ms | 32.4 ms | Passed |
-| Idle aggregate working set (pre-correction) | 339.5 MB | n/a | n/a | Diagnostic only |
+| Startup, 40 samples | 1,069.7 ms | 1,308.0 ms | 8,598.8 ms | Passed |
+| Document open, 20 samples | 109.7 ms | 139.3 ms | 230.6 ms | Passed |
+| Input to painted frame, 20 samples | 31.3 ms | 32.0 ms | 32.2 ms | Passed |
+| Idle private working set after 60 seconds | n/a | n/a | 74.0 MB | Passed |
 
-This run is comparison evidence, not reference-profile sign-off. Its startup stopwatch included post-ready PowerShell diagnostics, and its memory value summed shared pages once per WebView2 process. Both measurement errors are corrected in the current harness. The run also uses the dedicated editor harness rather than the complete production workspace, so complete-workspace startup, idle memory, and stress integrity remain open release-gate work.
+Two earlier `e6f1fef` comparison runs are retained rather than discarded: [run 34597407797](https://github.com/moosicalbovine/Cairn.md/actions/runs/34597407797) recorded startup at 4,127.9 ms p95, and [run 34598812964](https://github.com/moosicalbovine/Cairn.md/actions/runs/34598812964) recorded 5,556.4 ms p95. In both runs, normal starts clustered near 1.0-1.5 seconds before a block of rapid relaunches slowed to 3.3-5.8 seconds. Document open, input latency, and private memory passed in both. The harness now implements the plan's required reset interval between samples; it does not remove or replace any slow sample inside a run.
+
+Hosted results are release-gate evidence, but they are not a dedicated physical reference-machine benchmark because virtual-machine load varies. A local reference run is still desirable when a Windows machine with the Visual Studio C++ workload is available.
 
 ## Startup and memory measurement
 

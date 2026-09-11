@@ -4,7 +4,7 @@ Thank you for helping make local Markdown work easier and safer.
 
 ## Project status
 
-Cairn.md is under active `v0.1.0` development. Contributions are most useful when they improve implementation quality, tests, requirements, accessibility, workflows, or documentation.
+Cairn.md `v0.1.0` is an early prerelease, and development is moving toward the `v0.2.0` organization and search scope. Contributions are most useful when they improve implementation quality, tests, requirements, accessibility, workflows, or documentation.
 
 ## Ways to contribute
 
