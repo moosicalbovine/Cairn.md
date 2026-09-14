@@ -10,6 +10,7 @@ import {
   addTrackedFolder,
   importMarkdown,
   listTrackedFolderEntries,
+  listTrackedFolders,
 } from "../../lib/tauri/import";
 import {
   bindLibraryRoot,
@@ -68,9 +69,15 @@ export function InstalledSmokeRunner() {
       let session: EditorSession | null = null;
       try {
         const paths = await getPerformanceFixturePaths();
-        await bindLibraryRoot(paths.libraryRoot);
-        const tracked = await addTrackedFolder(paths.trackedRoot);
-        const project = await createProject("Installed Project");
+        const library = await bindLibraryRoot(paths.libraryRoot);
+        const trackedFolders = await listTrackedFolders();
+        const tracked =
+          trackedFolders.find(
+            (folder) => folder.absolutePath.toLowerCase() === paths.trackedRoot.toLowerCase(),
+          ) ?? (await addTrackedFolder(paths.trackedRoot));
+        const project =
+          library.projects.find((candidate) => candidate.relativePath === "Installed Project") ??
+          (await createProject("Installed Project"));
         report = { ...report, projectCreated: true };
 
         const entries = await listTrackedFolderEntries(tracked.id);
@@ -89,7 +96,10 @@ export function InstalledSmokeRunner() {
         }
         report = { ...report, trackedImport: true };
 
-        const document = await createDocument(project.id, "installed-proof.md");
+        const document =
+          project.documents.find(
+            (candidate) => candidate.relativePath === "Installed Project/installed-proof.md",
+          ) ?? (await createDocument(project.id, "installed-proof.md"));
         const content = await readDocument(document.id);
         session = EditorSession.open(content.bytes);
         const segment = session.visual.projection.segments.find(

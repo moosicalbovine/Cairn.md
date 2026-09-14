@@ -85,12 +85,29 @@ jobs:
           } | ConvertTo-Json | Set-Content performance-results\environment.json
       - name: Enforce release performance contract
         run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
+      - name: Download previous release installer
+        id: previous-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = @(gh release list --limit 1 --json tagName | ConvertFrom-Json)[0]
+          if ($null -eq $release -or $release.tagName -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+            throw 'A previous semantic-versioned GitHub release is required for upgrade validation'
+          }
+          $previousVersion = $Matches.version
+          New-Item -ItemType Directory -Force previous-release | Out-Null
+          gh release download $release.tagName --pattern '*.exe' --dir previous-release
+          $previousInstaller = Get-ChildItem 'previous-release\*.exe' | Select-Object -First 1
+          if ($null -eq $previousInstaller) { throw "Release $($release.tagName) has no Windows installer" }
+          "installer=$($previousInstaller.FullName)" >> $env:GITHUB_OUTPUT
+          "version=$previousVersion" >> $env:GITHUB_OUTPUT
       - name: Validate installed release workflow
         shell: pwsh
         run: |
           $installer = Get-ChildItem 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
           if ($null -eq $installer) { throw 'NSIS installer was not built' }
-          npm run release:validate -- -InstallerPath $installer.FullName -ExpectedVersion $env:GITHUB_REF_NAME.Substring(1)
+          npm run release:validate -- -InstallerPath $installer.FullName -ExpectedVersion $env:GITHUB_REF_NAME.Substring(1) -PreviousInstallerPath '${{ steps.previous-release.outputs.installer }}' -PreviousVersion '${{ steps.previous-release.outputs.version }}'
       - name: Verify embedded WebView2 bootstrapper
         shell: pwsh
         run: |
