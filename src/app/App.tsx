@@ -75,7 +75,7 @@ export function App() {
         setError(
           reason instanceof Error
             ? reason.message
-            : "Cairn.md could not reach its desktop service. Restart the application.",
+            : "No diagnostic details were provided.",
         );
         setBoot("unavailable");
       }
@@ -104,12 +104,11 @@ export function App() {
 
   if (boot === "unavailable" || snapshot === null) {
     return (
-      <main className="startup-screen">
+      <main className="startup-screen" role="alert">
         <span className="setup-mark" aria-hidden="true">C</span>
-        <h1>Cairn.md could not connect to its desktop service</h1>
-        <p>
-          {error ?? "Close this window, then start or restart the installed Cairn.md Windows application."}
-        </p>
+        <h1>Cairn.md could not finish starting</h1>
+        <p>{error ?? "No diagnostic details were provided."}</p>
+        <p>Close this window, then start or restart the installed Cairn.md Windows application.</p>
       </main>
     );
   }
