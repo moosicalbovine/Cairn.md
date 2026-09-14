@@ -1,7 +1,7 @@
 # Cairn.md User Guide
 
 > [!NOTE]
-> Cairn.md `v0.1.0` is an early MVP. Its Windows installer is unsigned; verify
+> Cairn.md `v0.1.1` is an early MVP. Its Windows installer is unsigned; verify
 > the release checksum before running it.
 
 ## What Cairn.md is for
@@ -42,7 +42,7 @@ The app privately records the original path and import date for reference. This 
 
 Importing the same source more than once creates another copy. If a filename already exists in the destination project, Cairn.md chooses an available name such as `proposal (2).md`; you can rename it afterward.
 
-## v0.1.0 workflow
+## v0.1.x workflow
 
 ### 1. Choose or reconnect a library
 
@@ -88,7 +88,7 @@ Visual mode is the default. You edit the rendered document directly using famili
 
 Source mode exposes the underlying Markdown text for precise editing or syntax that cannot be represented safely in Visual mode.
 
-There is no separate Preview or Split mode in `v0.1.0` because Visual mode is already an editable rendered view.
+There is no separate Preview or Split mode in `v0.1.x` because Visual mode is already an editable rendered view.
 
 ### 5. Autosave and recovery
 
@@ -116,7 +116,7 @@ Cairn.md does not require proprietary markup. Unsupported or ambiguous syntax mu
 
 ## Appearance
 
-`v0.1.0` provides three appearance settings:
+`v0.1.x` provides three appearance settings:
 
 - **Light**
 - **Dark**
@@ -159,7 +159,7 @@ Developer-oriented Git concepts such as staging, branches, remotes, pushing, pul
 
 ## Performance and reliability targets
 
-`v0.1.0` is intended to meet these targets on a typical work laptop:
+`v0.1.x` is intended to meet these targets on a typical work laptop:
 
 - cold launch within 1.5 seconds;
 - editor input response under 50 milliseconds;
@@ -170,4 +170,4 @@ Developer-oriented Git concepts such as staging, branches, remotes, pushing, pul
 
 ## Getting help
 
-Use this GitHub repository's issue tracker for questions about the v0.1.0 prerelease, workflow examples, documentation feedback, and accessibility concerns. Never attach confidential workplace documents or expose private file paths in a public issue.
+Use this GitHub repository's issue tracker for questions about the v0.1.x prereleases, workflow examples, documentation feedback, and accessibility concerns. Never attach confidential workplace documents or expose private file paths in a public issue.

@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  measure:
+  build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -18,8 +18,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install JavaScript dependencies
         run: npm ci
-      - name: Build release application
+      - name: Build release candidate
         run: npm run tauri build
+      - name: Verify embedded WebView2 bootstrapper
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
+          & scripts/release/verify-webview2-bootstrapper.ps1 -InstallerPath $installer.FullName
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairn-release-candidate-${{ github.sha }}
+          path: |
+            src-tauri/target/release/cairn-md.exe
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  measure:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Download release candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: cairn-release-candidate-${{ github.sha }}
+          path: release-candidate
       - name: Record Windows and WebView2 environment
         shell: pwsh
         run: |
@@ -46,23 +74,7 @@ jobs:
             storageMediaType = $storageMediaType
           } | ConvertTo-Json | Set-Content performance-results\environment.json
       - name: Measure release performance
-        run: npm run perf -- "src-tauri\target\release\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
-      - name: Validate current-user installer
-        id: installer-smoke
-        if: always()
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
-          if ($null -eq $installer) { throw 'NSIS installer was not built' }
-          $expectedVersion = (Get-Content 'src-tauri\tauri.conf.json' | ConvertFrom-Json).version
-          npm run release:validate -- -InstallerPath $installer.FullName -ExpectedVersion $expectedVersion
-      - name: Verify embedded WebView2 bootstrapper
-        id: bootstrapper-proof
-        if: always() && steps.installer-smoke.outcome == 'success'
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
-          scripts/release/verify-webview2-bootstrapper.ps1 -InstallerPath $installer.FullName
+        run: npm run perf -- "release-candidate\cairn-md.exe" --samples 40 --idle-seconds 60 --output "performance-results\release.json"
       - name: Upload raw performance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,11 +83,47 @@ jobs:
           path: performance-results/
           if-no-files-found: warn
           retention-days: 30
+
+  installer:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download release candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: cairn-release-candidate-${{ github.sha }}
+          path: release-candidate
+      - name: Download previous release installer
+        id: previous-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $currentVersion = (Get-Content 'src-tauri\tauri.conf.json' | ConvertFrom-Json).version
+          $releases = gh release list --limit 100 --json tagName | ConvertFrom-Json
+          $release = $releases | Where-Object { $_.tagName -ne "v$currentVersion" } | Select-Object -First 1
+          if ($null -eq $release -or $release.tagName -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+            throw 'A previous semantic-versioned GitHub release is required for upgrade validation'
+          }
+          $previousVersion = $Matches.version
+          New-Item -ItemType Directory -Force previous-release | Out-Null
+          gh release download $release.tagName --pattern '*.exe' --dir previous-release
+          $previousInstaller = Get-ChildItem 'previous-release\*.exe' | Select-Object -First 1
+          if ($null -eq $previousInstaller) { throw "Release $($release.tagName) has no Windows installer" }
+          "installer=$($previousInstaller.FullName)" >> $env:GITHUB_OUTPUT
+          "version=$previousVersion" >> $env:GITHUB_OUTPUT
+      - name: Validate upgrade and installed workflow
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'release-candidate\bundle\nsis\*.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'NSIS installer was not built' }
+          $expectedVersion = (Get-Content 'src-tauri\tauri.conf.json' | ConvertFrom-Json).version
+          & scripts/release/validate-installer.ps1 -InstallerPath $installer.FullName -ExpectedVersion $expectedVersion -PreviousInstallerPath '${{ steps.previous-release.outputs.installer }}' -PreviousVersion '${{ steps.previous-release.outputs.version }}'
       - name: Upload validated installer
-        if: steps.installer-smoke.outcome == 'success' && steps.bootstrapper-proof.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: cairn-md-validated-installer-${{ github.sha }}
-          path: src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: warn
+          path: release-candidate/bundle/nsis/*.exe
+          if-no-files-found: error
           retention-days: 30

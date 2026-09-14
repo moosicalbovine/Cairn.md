@@ -1,11 +1,24 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$InstallerPath,
-    [string]$ExpectedVersion = '0.1.0'
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedVersion,
+    [string]$PreviousInstallerPath,
+    [string]$PreviousVersion
 )
 
 $ErrorActionPreference = 'Stop'
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
+$hasPreviousInstaller = -not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)
+$hasPreviousVersion = -not [string]::IsNullOrWhiteSpace($PreviousVersion)
+if ($hasPreviousInstaller -ne $hasPreviousVersion) {
+    throw 'PreviousInstallerPath and PreviousVersion must be supplied together'
+}
+$resolvedPreviousInstaller = if ($hasPreviousInstaller) {
+    (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
+} else {
+    $null
+}
 $testRoot = Join-Path $env:TEMP ("cairn-installer-validation-" + [guid]::NewGuid())
 $appData = Join-Path $testRoot 'app-data'
 $library = Join-Path $testRoot 'user-library'
@@ -15,6 +28,9 @@ $ready = "$report.ready"
 New-Item -ItemType Directory -Force -Path $appData, $library, $tracked | Out-Null
 $trackedSource = Join-Path $tracked 'tracked-proof.md'
 Set-Content -LiteralPath $trackedSource -Value '# Original tracked file remains unchanged.' -NoNewline
+$upgradeProject = Join-Path $library 'Existing Project'
+$upgradeCanary = Join-Path $upgradeProject 'upgrade-canary.md'
+$upgradeCanaryContent = '# Existing library content survives the upgrade.'
 $applicationProcess = $null
 $uninstaller = $null
 $uninstallAttempted = $false
@@ -54,32 +70,34 @@ function Resolve-UninstallerPath($entry) {
     return $executable.Groups['path'].Value
 }
 
-if ($null -ne (Find-CairnUninstallEntry)) {
-    throw 'Cairn.md is already installed for this user; use a disposable account or runner'
+function Install-Cairn([string]$path, [string]$description) {
+    $install = Start-Process -FilePath $path -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
+    if ($install.ExitCode -ne 0) {
+        throw "$description exited with code $($install.ExitCode)"
+    }
 }
 
-try {
-    $install = Start-Process -FilePath $resolvedInstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
-    if ($install.ExitCode -ne 0) {
-        throw "Installer exited with code $($install.ExitCode)"
-    }
-
+function Assert-InstalledVersion([string]$version) {
     $entry = Find-CairnUninstallEntry
     if ($null -eq $entry) {
         throw 'Cairn.md did not register a current-user uninstall entry'
     }
-    if ($entry.DisplayVersion -ne $ExpectedVersion) {
-        throw "Installed version $($entry.DisplayVersion) does not match $ExpectedVersion"
+    if ($entry.DisplayVersion -ne $version) {
+        throw "Installed version $($entry.DisplayVersion) does not match $version"
     }
-    $uninstaller = Resolve-UninstallerPath $entry
-    if (-not (Test-Path -LiteralPath $uninstaller)) {
+    return $entry
+}
+
+function Resolve-InstalledApplication($entry) {
+    $candidateUninstaller = Resolve-UninstallerPath $entry
+    if (-not (Test-Path -LiteralPath $candidateUninstaller)) {
         throw 'The Cairn.md uninstaller is missing'
     }
     $registeredLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
     $installLocation = if ($registeredLocation -and (Test-Path -LiteralPath $registeredLocation)) {
         $registeredLocation
     } else {
-        Split-Path -Parent $uninstaller
+        Split-Path -Parent $candidateUninstaller
     }
     if (-not $installLocation -or -not (Test-Path -LiteralPath $installLocation)) {
         throw 'The registered install location is missing'
@@ -90,17 +108,25 @@ try {
     if ($null -eq $application) {
         throw 'The installed Cairn.md executable is missing'
     }
+    return @{
+        Application = $application
+        Uninstaller = $candidateUninstaller
+    }
+}
+
+function Invoke-InstalledWorkflow($application) {
+    Remove-Item -LiteralPath $report, $ready -Force -ErrorAction SilentlyContinue
     $env:CAIRN_PERF_MODE = '1'
     $env:CAIRN_PERF_SCENARIO = 'installed'
     $env:CAIRN_PERF_OUTPUT = $report
     $env:CAIRN_PERF_LIBRARY_ROOT = $library
     $env:CAIRN_PERF_TRACKED_ROOT = $tracked
     $env:CAIRN_APP_DATA_DIR = $appData
-    $applicationProcess = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
+    $script:applicationProcess = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     while (-not (Test-Path -LiteralPath $ready) -and [DateTime]::UtcNow -lt $deadline) {
-        if ($applicationProcess.HasExited) {
-            throw "Installed Cairn.md exited with code $($applicationProcess.ExitCode) before completing its workflow"
+        if ($script:applicationProcess.HasExited) {
+            throw "Installed Cairn.md exited with code $($script:applicationProcess.ExitCode) before completing its workflow"
         }
         Start-Sleep -Milliseconds 100
     }
@@ -110,16 +136,20 @@ try {
     $workflow = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if ($workflow.benchmark -ne 'cairn-installed-workflow' -or $workflow.passed -ne $true) {
         $failedChecks = @($workflow.checks.psobject.Properties | Where-Object { $_.Value -ne $true } | ForEach-Object { $_.Name })
-        throw "Installed Cairn.md workflow failed: $($failedChecks -join ', ')"
+        $failureDetail = if ($workflow.message) { ": $($workflow.message)" } else { '' }
+        throw "Installed Cairn.md workflow failed ($($failedChecks -join ', '))$failureDetail"
     }
     $termination = Start-Process -FilePath 'taskkill.exe' `
-        -ArgumentList '/PID', $applicationProcess.Id, '/T', '/F' `
+        -ArgumentList '/PID', $script:applicationProcess.Id, '/T', '/F' `
         -Wait -PassThru -WindowStyle Hidden
     if ($termination.ExitCode -ne 0) {
         throw "Installed Cairn.md could not be stopped after validation (code $($termination.ExitCode))"
     }
-    $applicationProcess.WaitForExit(10000) | Out-Null
+    $script:applicationProcess.WaitForExit(10000) | Out-Null
+    $script:applicationProcess = $null
+}
 
+function Assert-WorkflowFiles {
     $savedDocument = Join-Path (Join-Path $library 'Installed Project') 'installed-proof.md'
     if (-not (Test-Path -LiteralPath $savedDocument) -or
         (Get-Content -LiteralPath $savedDocument -Raw) -notlike '*Edited through the installed Cairn.md visual editor.*') {
@@ -128,15 +158,38 @@ try {
     if ((Get-Content -LiteralPath $trackedSource -Raw) -ne '# Original tracked file remains unchanged.') {
         throw 'The installed workflow changed the original tracked Markdown file'
     }
+    return $savedDocument
+}
 
-    $reinstall = Start-Process -FilePath $resolvedInstaller -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
-    if ($reinstall.ExitCode -ne 0) {
-        throw "Same-version reinstall exited with code $($reinstall.ExitCode)"
+if ($null -ne (Find-CairnUninstallEntry)) {
+    throw 'Cairn.md is already installed for this user; use a disposable account or runner'
+}
+
+try {
+    if ($hasPreviousInstaller) {
+        Install-Cairn $resolvedPreviousInstaller "Previous-version installer"
+        $previousEntry = Assert-InstalledVersion $PreviousVersion
+        $previousInstallation = Resolve-InstalledApplication $previousEntry
+        $uninstaller = $previousInstallation.Uninstaller
+        New-Item -ItemType Directory -Force -Path $upgradeProject | Out-Null
+        Set-Content -LiteralPath $upgradeCanary -Value $upgradeCanaryContent -NoNewline
     }
-    $reinstalledEntry = Find-CairnUninstallEntry
-    if ($null -eq $reinstalledEntry -or $reinstalledEntry.DisplayVersion -ne $ExpectedVersion) {
-        throw 'Cairn.md reinstall did not preserve its current-user registration'
+
+    Install-Cairn $resolvedInstaller "Installer"
+    $entry = Assert-InstalledVersion $ExpectedVersion
+    $installation = Resolve-InstalledApplication $entry
+    $application = $installation.Application
+    $uninstaller = $installation.Uninstaller
+    if ($hasPreviousInstaller -and
+        (-not (Test-Path -LiteralPath $upgradeCanary) -or
+        (Get-Content -LiteralPath $upgradeCanary -Raw) -ne $upgradeCanaryContent)) {
+        throw "Upgrade from $PreviousVersion did not preserve the existing user library"
     }
+    Invoke-InstalledWorkflow $application
+    $savedDocument = Assert-WorkflowFiles
+
+    Install-Cairn $resolvedInstaller "Same-version reinstall"
+    $reinstalledEntry = Assert-InstalledVersion $ExpectedVersion
     $uninstaller = Resolve-UninstallerPath $reinstalledEntry
     if (-not (Test-Path -LiteralPath $savedDocument)) {
         throw 'Cairn.md reinstall removed the user-selected library'
@@ -150,13 +203,17 @@ try {
     if (-not (Test-Path -LiteralPath $savedDocument)) {
         throw 'Uninstall removed user-owned library content'
     }
+    if ($hasPreviousInstaller -and -not (Test-Path -LiteralPath $upgradeCanary)) {
+        throw 'Uninstall removed library content preserved by the upgrade'
+    }
     if (Test-Path -LiteralPath $application.FullName) {
         throw 'The installed Cairn.md executable remains after uninstall'
     }
     if ($null -ne (Find-CairnUninstallEntry)) {
         throw 'The Cairn.md uninstall registration remains after uninstall'
     }
-    Write-Output "Cairn.md $ExpectedVersion installer validation passed"
+    $upgradeDescription = if ($hasPreviousInstaller) { " including upgrade from $PreviousVersion" } else { '' }
+    Write-Output "Cairn.md $ExpectedVersion installer validation passed$upgradeDescription"
 }
 finally {
     if ($null -ne $applicationProcess -and -not $applicationProcess.HasExited) {

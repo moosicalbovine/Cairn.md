@@ -3,6 +3,24 @@
 All notable Cairn.md changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-09-14
+
+### Fixed
+
+- Startup failures now show the available diagnostic detail and clear recovery
+  instructions.
+- Repository and user guidance now match the implemented MVP, release status,
+  paths, and measured performance contract.
+
+### Changed
+
+- Installer validation now exercises an upgrade from the previous release and
+  confirms that the existing library remains usable.
+- Performance and installer checks now run on separate clean Windows jobs so
+  build activity cannot distort release measurements or installed workflows.
+- Historical scope notes identify later reference corrections without changing
+  the original product decisions.
+
 ## [0.1.0] - 2026-09-11
 
 ### Added
@@ -20,4 +38,5 @@ All notable Cairn.md changes are documented here. The project follows
 - Automated Markdown preservation, stress, forced-termination, desktop, installer,
   and release-performance checks.
 
+[0.1.1]: https://github.com/moosicalbovine/Cairn.md/releases/tag/v0.1.1
 [0.1.0]: https://github.com/moosicalbovine/Cairn.md/releases/tag/v0.1.0

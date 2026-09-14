@@ -158,6 +158,7 @@ pub fn write_installed_smoke_report(report: InstalledSmokeReport) -> Result<(), 
             "sourceMode": report.source_mode,
             "autosave": report.autosave,
         },
+        "message": report.message,
         "passed": passed,
     });
     let bytes = serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())?;
