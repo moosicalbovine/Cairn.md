@@ -51,7 +51,6 @@ type PerformanceProcess = Readonly<{
 
 const pollIntervalMs = 50;
 const startupResetDelayMs = 1_000;
-const cleanupTimeoutMs = 30_000;
 const startupTimeoutMs = 60_000;
 const reportTimeoutMs = 120_000;
 const startupLimitMs = 1_500;
@@ -120,34 +119,30 @@ function startPerformanceProcess(
   return { child, directory, reportPath, readyPath: `${reportPath}.ready` };
 }
 
-async function stopPerformanceProcess(run: PerformanceProcess): Promise<void> {
+function stopPerformanceProcess(run: PerformanceProcess): void {
   if (run.child.pid !== undefined) {
     spawnSync("taskkill.exe", ["/PID", String(run.child.pid), "/T", "/F"], {
       stdio: "ignore",
       windowsHide: true,
     });
   }
-  const cleanupStartedAt = performance.now();
-  while (true) {
-    try {
-      rmSync(run.directory, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 100,
-      });
+  try {
+    rmSync(run.directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (reason) {
+    const code =
+      typeof reason === "object" && reason !== null && "code" in reason
+        ? reason.code
+        : undefined;
+    if (code === "EPERM" || code === "EBUSY" || code === "ENOTEMPTY") {
+      process.stderr.write("Warning: Windows deferred cleanup of isolated benchmark data.\n");
       return;
-    } catch (reason) {
-      const code =
-        typeof reason === "object" && reason !== null && "code" in reason
-          ? reason.code
-          : undefined;
-      const canRetry = code === "EPERM" || code === "EBUSY" || code === "ENOTEMPTY";
-      if (!canRetry || performance.now() - cleanupStartedAt >= cleanupTimeoutMs) {
-        throw reason;
-      }
-      await delay(250);
     }
+    throw reason;
   }
 }
 
@@ -189,7 +184,7 @@ async function measureStartup(binaryPath: string, sample: number): Promise<Start
       ),
     };
   } finally {
-    await stopPerformanceProcess(run);
+    stopPerformanceProcess(run);
     // Rapid WebView2 process-tree relaunches can overlap Windows cleanup and
     // antimalware work. Keep every sample, but let the host return to idle first.
     await delay(startupResetDelayMs);
@@ -222,7 +217,7 @@ async function measureBrowser(binaryPath: string): Promise<BrowserReport> {
     await waitForFile(run, run.reportPath, reportTimeoutMs, "the browser measurements");
     return parseBrowserReport(run.reportPath);
   } finally {
-    await stopPerformanceProcess(run);
+    stopPerformanceProcess(run);
   }
 }
 
@@ -244,7 +239,7 @@ async function measureIdle(
       ),
     };
   } finally {
-    await stopPerformanceProcess(run);
+    stopPerformanceProcess(run);
   }
 }
 
