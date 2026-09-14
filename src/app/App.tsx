@@ -72,11 +72,7 @@ export function App() {
         setBoot("ready");
       } catch (reason) {
         if (!active) return;
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "No diagnostic details were provided.",
-        );
+        setError(reason instanceof Error ? reason.message : null);
         setBoot("unavailable");
       }
     })();
@@ -104,7 +100,7 @@ export function App() {
 
   if (boot === "unavailable" || snapshot === null) {
     return (
-      <main className="startup-screen" role="alert">
+      <main className="startup-screen" aria-live="assertive" aria-atomic="true">
         <span className="setup-mark" aria-hidden="true">C</span>
         <h1>Cairn.md could not finish starting</h1>
         <p>{error ?? "No diagnostic details were provided."}</p>
