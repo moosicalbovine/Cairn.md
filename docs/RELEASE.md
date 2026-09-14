@@ -39,7 +39,13 @@ npm run release:verify-webview2 -- -InstallerPath $installer.FullName
 
 The script installs for the current user and runs an isolated workflow through the installed release binary. It creates a project, imports from a tracked folder, visually edits Markdown, inspects the same edit through Source mode, and persists it through the recovery-backed save path. The script then verifies that the tracked original stays unchanged, performs a same-version reinstall, uninstalls silently, and confirms that the user-selected library remains.
 
-The release workflows run that installed-app test with Evergreen WebView2 present. They also inspect Tauri's generated NSIS program and the final installer to prove that the missing-runtime branch installs the embedded bootstrapper. The check requires the bootstrapper in the installer to be byte-for-byte identical to the Microsoft-signed build input.
+The release workflows build the candidate once, then run performance and
+installer checks on separate clean Windows jobs. The installer job exercises the
+previous-version upgrade with Evergreen WebView2 present. It also inspects
+Tauri's generated NSIS program and the final installer to prove that the
+missing-runtime branch installs the embedded bootstrapper. The check requires
+the bootstrapper in the installer to be byte-for-byte identical to the
+Microsoft-signed build input.
 
 GitHub's current Windows runners use Windows Server, where Microsoft installs WebView2 as a required component and does not support removing it. Those runners therefore cannot execute the missing-runtime branch. For a prerelease, the package proof above is accepted with this limitation disclosed. A stable release still requires an install test on a clean Windows client without WebView2.
 

@@ -16,6 +16,8 @@ All notable Cairn.md changes are documented here. The project follows
 
 - Installer validation now exercises an upgrade from the previous release and
   confirms that the existing library remains usable.
+- Performance and installer checks now run on separate clean Windows jobs so
+  build activity cannot distort release measurements or installed workflows.
 - Historical scope notes identify later reference corrections without changing
   the original product decisions.
 
