@@ -20,6 +20,11 @@ jobs:
         run: npm ci
       - name: Build release candidate
         run: npm run tauri build
+      - name: Verify embedded WebView2 bootstrapper
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
+          & scripts/release/verify-webview2-bootstrapper.ps1 -InstallerPath $installer.FullName
       - name: Upload release candidate
         uses: actions/upload-artifact@v4
         with:
@@ -27,7 +32,6 @@ jobs:
           path: |
             src-tauri/target/release/cairn-md.exe
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/nsis/**
           if-no-files-found: error
           retention-days: 3
 
@@ -116,11 +120,6 @@ jobs:
           if ($null -eq $installer) { throw 'NSIS installer was not built' }
           $expectedVersion = (Get-Content 'src-tauri\tauri.conf.json' | ConvertFrom-Json).version
           & scripts/release/validate-installer.ps1 -InstallerPath $installer.FullName -ExpectedVersion $expectedVersion -PreviousInstallerPath '${{ steps.previous-release.outputs.installer }}' -PreviousVersion '${{ steps.previous-release.outputs.version }}'
-      - name: Verify embedded WebView2 bootstrapper
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem 'release-candidate\bundle\nsis\*.exe' | Select-Object -First 1
-          & scripts/release/verify-webview2-bootstrapper.ps1 -InstallerPath $installer.FullName -GeneratedNsisRoot 'release-candidate\nsis'
       - name: Upload validated installer
         uses: actions/upload-artifact@v4
         with:
