@@ -12,6 +12,9 @@ deepened: 2026-09-08
 
 # Cairn.md Product Scope - Plan
 
+> [!NOTE]
+> Cairn.md v0.1.0 shipped on 2026-09-11. This document is retained as its implementation record. See the repository's current user, architecture, performance, and release documentation for shipped behavior and evidence.
+
 ## Goal Capsule
 
 - **Objective:** Give Windows knowledge workers a fast, dependable place to collect, organize, read, and edit Markdown documents that would otherwise remain scattered across local downloads and workplace tools.
@@ -45,7 +48,7 @@ Opening files in unrelated editors fragments the workflow further and makes a gr
 - **Direct visual editing as the default.** (session-settled: user-directed — chosen over separate edit and preview panes: the rendered document should remain editable.) Governs R14, R16.
 - **Portable Markdown over proprietary document features.** (session-settled: user-directed — chosen for the broadest compatibility when sharing edited files with colleagues.) Governs R18, R19.
 - **One relocatable library root.** (session-settled: user-directed — chosen over fixed absolute internal paths: moving the library must not break its organization.) Governs R2, R3, R6.
-- **Release the focused library and editor before deeper organization and retrieval.** (session-settled: user-directed — chosen over shipping subprojects, Git, and search together: the essential workflow should arrive first.) Governs R4, R21, R22, R23, R24, R25.
+- **Release the focused library and editor before deeper organization and retrieval.** (session-settled: user-directed — chosen over shipping sub-projects, Git, and search together: the essential workflow should arrive first.) Governs R4, R21, R22, R23, R24, R25.
 
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
@@ -53,12 +56,12 @@ Opening files in unrelated editors fragments the workflow further and makes a gr
 This plan owns the Cairn.md `v0.1.0` MVP as one coherent work unit.
 The broader breakdown below is the current product direction rather than a committed roadmap.
 
-- **v0.2.0 depends on the v0.1.0 project, document, and metadata model.** It adds nested subprojects, tags, fuzzy metadata search, ranked full-text search, filters, and saved organized views.
+- **v0.2.0 depends on the v0.1.0 project, document, and metadata model.** It adds nested sub-projects, tags, fuzzy metadata search, ranked full-text search, filters, and saved organized views.
   - Tags support retrieval and views only and never alter Markdown content.
   - Fuzzy matching applies to metadata such as filenames, titles, tags, project names, and paths rather than every content word.
   - Full-text results use ranked matching with contextual snippets.
 - **v1.0.0 is the first publicly announced release and depends on the v0.2.0 hierarchy.** It adds one local Git repository per top-level project, manual named versions, automatic recovery checkpoints, minimal Git state, and document history navigation.
-  - Git history spans the top-level project and all of its subprojects.
+  - Git history spans the top-level project and all of its sub-projects.
   - Autosave remains separate from Git commits.
   - The visible Git state is limited to `Committed · <short hash>` or `Uncommitted changes · <short hash>`.
   - Branches, staging, remotes, merge states, and ahead or behind states are not exposed.
@@ -78,14 +81,14 @@ The broader breakdown below is the current product direction rather than a commi
 - R1. Cairn.md must run as a Windows-first desktop application without requiring an account, internet connection, or cloud service for its core workflow.
 - R2. The user must select one writable folder as the active Cairn.md library root.
 - R3. Cairn.md must store internal project and document references relative to the active library root so the whole library can be moved and relinked.
-- R4. The MVP must organize documents into top-level projects and must not expose nested subprojects.
+- R4. The MVP must organize documents into top-level projects and must not expose nested sub-projects.
 - R5. The library workspace must let the user create and rename top-level projects and create, rename, move, or delete documents.
 - R6. Cairn.md must rescan and reconcile files or folders moved or renamed within the library root without creating duplicate library entries.
 
 **Import and provenance**
 
-- R7. The MVP must import `.md` files through a file picker, drag and drop, or the Tracked PC Folders section.
-- R8. Tracked PC Folders must be a collapsible, import-only view of user-selected folders and must never modify source files.
+- R7. The MVP must import `.md` files through a file picker, drag and drop, or the Tracked PC folders section.
+- R8. Tracked PC folders must be a collapsible, import-only view of user-selected folders and must never modify source files.
 - R9. Every import must create an independent copy inside the selected top-level project, even when the same source was imported before.
 - R10. When an imported filename already exists at the destination, Cairn.md must preserve both documents by assigning the new copy the smallest available numbered name such as `proposal (2).md`.
 - R11. Cairn.md must keep the original absolute source path, import date and time, and current library-relative path in app-owned metadata rather than writing them into the Markdown file.
@@ -141,7 +144,7 @@ flowchart LR
   - **Outcome:** The user can resume work from the selected library location.
   - **Covers R1, R2, R3, R4, R6.**
 - F2. **Import a Markdown document**
-  - **Trigger:** A1 chooses a file, drops a file into a project, or selects a file from A3 through Tracked PC Folders.
+  - **Trigger:** A1 chooses a file, drops a file into a project, or selects a file from A3 through Tracked PC folders.
   - **Steps:** A1 selects a destination project; Cairn.md copies the file; Cairn.md resolves any filename collision; Cairn.md records provenance; Cairn.md opens or selects the library copy.
   - **Outcome:** A new independent Markdown document is available in the project.
   - **Covers R7, R8, R9, R10, R11, R12.**
@@ -170,7 +173,7 @@ flowchart LR
   - **Then:** Cairn.md creates `proposal (3).md` without overwriting either existing document.
 - AE3. **Working from a tracked folder**
   - **Covers R7, R8, R12.**
-  - **Given:** A1 has added a folder to Tracked PC Folders.
+  - **Given:** A1 has added a folder to Tracked PC folders.
   - **When:** A1 selects one of its Markdown files and imports it into a project.
   - **Then:** Editing the imported document changes only the library copy and does not modify the source file.
 - AE4. **Relocating the library**
@@ -193,7 +196,7 @@ flowchart LR
 
 **Deferred for later**
 
-- Nested subprojects, tags, search, and saved views are `v0.2.0` candidates described in How This Work Fits Together.
+- Nested sub-projects, tags, search, and saved views are `v0.2.0` candidates described in How This Work Fits Together.
 - Local Git, named versions, per-document history navigation, historical read-only viewing, and current-to-history diffs are `v1.0.0` candidates described in How This Work Fits Together.
 
 **Outside this product's initial identity**
@@ -221,9 +224,9 @@ flowchart LR
 - KTD1. Use Tauri 2 for the desktop shell, Rust for trusted operating-system work, and React with TypeScript and Vite for the WebView2 interface. (session-settled: user-approved — chosen over native WinUI and Electron: the web editor ecosystem supports Markdown-first visual editing in one UI stack while Tauri avoids bundling a browser runtime.) Governs R1, R13-R20, R25-R30.
 - KTD2. Store canonical user content as `.md` files below the selected library root. Each MVP project is one direct child directory and each managed document is one direct `.md` child of its project. Store library identity, binding generation, settings, provenance, relative-path indexes, and recovery snapshots in a `rusqlite` database below `%LOCALAPPDATA%\Cairn.md`. An explicit relink operation validates a candidate root, shows a match summary, and requires confirmation before replacing the previous binding; project and document paths remain relative to the bound root. Governs R2-R6, R11, R23, R24.
 - KTD3. Keep the exact Markdown source string canonical. Use Milkdown 7 with CommonMark and GFM presets as a Visual-mode projection and CodeMirror 6 for Source mode. Parsed nodes retain source ranges, and Visual-mode transactions produce localized source patches instead of serializing the full editor tree. Unsupported syntax remains in source-backed blocks; Source-mode edits replace the canonical string and rebuild all mappings. (session-settled: user-approved — chosen over rejecting the whole document or normalizing unknown syntax: source-backed blocks preserve portable Markdown without hiding the rest of the visual editor.) Governs R14-R19.
-- KTD4. Route file picker, drag-and-drop, and Tracked PC Folder imports through one Rust import service. Copy through an operation-owned same-directory temporary file and compare the source identity and fingerprint before and after the copy. Finalize with no-overwrite semantics, retry collision allocation if the target appears concurrently, and commit provenance only after the destination is durable and verified. Governs R7-R12, R29, R30.
+- KTD4. Route file picker, drag-and-drop, and Tracked PC folder imports through one Rust import service. Copy through an operation-owned same-directory temporary file and compare the source identity and fingerprint before and after the copy. Finalize with no-overwrite semantics, retry collision allocation if the target appears concurrently, and commit provenance only after the destination is durable and verified. Governs R7-R12, R29, R30.
 - KTD5. Use `current_revision`, `durable_snapshot_revision`, and `disk_revision` in one serial document queue. Treat an edit as acknowledged when the UI assigns `current_revision` and queues recovery. Advance `durable_snapshot_revision` at least once per second and before releasing a document session; coalesce newer work while one disk write is in flight. Mark `Saved` only when `disk_revision` equals `current_revision`, and clear a snapshot only after its intended content hash matches disk. Governs R21-R24, R29, R30.
-- KTD6. Compare the disk fingerprint with the editor’s base fingerprint whenever reconciliation detects change and again while a Win32 handle denies new writers but permits replacement. Use an operation-owned backup during `ReplaceFileW`; fail closed if the protected operation cannot be established. Reload the disk file when no local revision is pending. Otherwise stop autosave, durably capture the external bytes and current draft, show `Save failed`, and offer reload or save-recovered-copy actions. Never retry against a new fingerprint without user action. (session-settled: user-approved — chosen over silent last-writer-wins: external changes must not be overwritten or disguised as version history.) Governs R22, R23, R30.
+- KTD6. Compare the disk fingerprint with the editor’s base fingerprint whenever reconciliation detects a change. Compare it again while a Win32 handle denies new writers but permits replacement. Use an operation-owned backup during `ReplaceFileW`; fail closed if the protected operation cannot be established. Reload the disk file when no local revision is pending. Otherwise, stop autosave, durably capture the external bytes and current draft, show `Save failed`, and offer reload or save-recovered-copy actions. Never retry against a new fingerprint without user action. (session-settled: user-approved — chosen over silent last-writer-wins: external changes must not be overwritten or disguised as version history.) Governs R22, R23, R30.
 - KTD7. Treat file-watcher events as hints. Debounce them and run an authoritative scan that normalizes Windows paths case-insensitively and suppresses self-generated save events by operation ID. Rebind identity only for one unambiguous file-identity match or one uniquely high-confidence fallback; ambiguous files receive separate records. Hash lazily only when cheaper facts cannot disambiguate. Governs R3, R6, R11, R25, R29, R30.
 - KTD8. Expose narrow Tauri commands instead of general frontend filesystem access. Resolve and validate every library mutation target in Rust, reject traversal and reparse-point escape outside the library root, and keep tracked folders read-only. Reject a tracked folder that is the library root or its descendant. Governs R1-R3, R5, R8, R29, R30.
 - KTD9. Distribute an x64 NSIS installer that uses the system Evergreen WebView2 runtime and includes Microsoft’s small WebView2 bootstrapper for missing runtimes. (session-settled: user-approved — chosen over bundling a fixed offline runtime: the compact installer preserves the lightweight goal and receives Windows-managed runtime security updates.) Governs R1, R25, R28, R30.
@@ -347,7 +350,7 @@ stateDiagram-v2
 
 ### Data Model
 
-The initial migrations create these logical records. U2 owns `0001_library.sql` for app settings, libraries, projects, documents, tracked folders, and pending file operations. U6 owns `0002_recovery.sql` for recovery snapshots and external conflicts.
+The four migrations create these logical records. U2 starts the model in `0001_library.sql`; `0002_journal_identity.sql` and `0003_tracked_folders.sql` extend journal and tracked-folder identity. U6 adds recovery snapshots and external conflicts in `0004_recovery.sql`.
 
 - `app_settings`: appearance and schema version.
 - `libraries`: stable library ID, active root binding, binding generation, prior binding, and a validation manifest held outside the library.
@@ -451,7 +454,7 @@ U1 must prove a thin Rust-to-WebView command and collect baseline startup and me
 - **Concurrent external writes:** A fingerprint check by itself has a race window. Use the protected Windows replacement protocol in KTD6 and preserve the replacement backup when any postcondition differs.
 - **Storage capability drift:** Sync providers, removable media, network shares, and filesystem changes may weaken replacement or recycle semantics after setup. Re-run KTD12 probes after relevant I/O failures and fall back to read-only access.
 - **Damaged app metadata:** A corrupt database or interrupted migration can detach provenance and recovery from valid files. Apply KTD13, retain the damaged database and WAL for diagnosis, and never initialize a replacement silently.
-- **Toolchain prerequisite:** Development requires Node.js, npm, Rust stable with the MSVC target, WebView2, and Microsoft C++ Build Tools. The current environment has Node.js and npm but has not yet demonstrated the Rust/MSVC toolchain.
+- **Toolchain prerequisite:** Development requires Node.js, npm, Rust stable with the MSVC target, WebView2, and Microsoft C++ Build Tools.
 - **Unsigned installer warnings:** Local and CI builds remain unsigned until the project owner supplies a trusted Windows signing certificate and release secrets.
 
 ### Alternatives Considered
@@ -514,7 +517,7 @@ U1 must prove a thin Rust-to-WebView command and collect baseline startup and me
 - **Test scenarios:** Cover first launch, cancelled selection, writable, read-only, missing, temporarily unavailable, non-empty, and capability-incompatible roots. Confirm failed selection retains the prior binding. Create and rename projects. Create, rename, move, and recycle documents. Relocate the full root; copied and unrelated candidates must not inherit its identity without confirmed relink. Exercise case-only renames, identical copies, rename-plus-edit, file swaps, cross-volume moves, junction escape, corrupt database and WAL, interrupted migrations, and two consecutive repair restarts. Verify ambiguous matches remain separate and rescans never create duplicates.
 - **Verification:** Pass V1-V3 and V6 with `src-tauri/tests/library_lifecycle.rs` green.
 
-### U3. Build one safe import pipeline and Tracked PC Folders
+### U3. Build one safe import pipeline and Tracked PC folders
 
 - **Goal:** Import independent Markdown copies through all three MVP entry points without touching source files.
 - **Requirements:** R7-R12. KTD4, KTD8, KTD11, KTD12.
@@ -542,7 +545,7 @@ U1 must prove a thin Rust-to-WebView command and collect baseline startup and me
 - **Requirements:** R21-R24, R29, R30. KTD4-KTD6, KTD11-KTD13.
 - **Product trace:** F3, F4, AE6.
 - **Dependencies:** U4, U5.
-- **Files:** `src/features/editor/persistence/`, `src/features/editor/recovery/`, `src/lib/tauri/persistence.ts`, `src-tauri/migrations/0002_recovery.sql`, `src-tauri/src/commands/persistence.rs`, `src-tauri/src/domain/recovery.rs`, `src-tauri/src/infrastructure/atomic_write.rs`, `src-tauri/tests/persistence_faults.rs`, `tests/e2e/autosave-recovery.spec.ts`.
+- **Files:** `src/features/editor/persistence/`, `src/features/editor/components/DocumentEditor.tsx`, `src/lib/tauri/persistence.ts`, `src-tauri/migrations/0004_recovery.sql`, `src-tauri/src/commands/persistence.rs`, `src-tauri/src/domain/recovery.rs`, `src-tauri/src/infrastructure/atomic_write.rs`, `src-tauri/tests/persistence_faults.rs`, `tests/e2e/autosave-recovery.spec.ts`.
 - **Approach:** Implement the revision counters, coalescing queue, one-second durable recovery cadence, protected replacement, external-conflict snapshots, retry, reload, collision-safe recovered copies, startup restoration, and journal repair. Derive only the four R22 labels. Add deterministic fault and race points around snapshot commit, handle acquisition, final fingerprint, replacement, metadata update, and cleanup.
 - **Test scenarios:** Run complete F3 and F4. Confirm `Saved → Saving… → Saved`, and prove an older write cannot mark a newer revision saved. Deny and restore write access. Verify no fifth persistence label appears. Reload a clean external edit; conflict on a pending local edit; then modify or delete the external file again while resolution is open. Test retry, accept recovery, discard recovery, and save recovery as a numbered document. Test snapshots that are newer than, equal to, older than, invalid for, or divergent from disk. Keep Visual and Source modes synchronized while saves are pending. Switch themes and panes during saving. Terminate at each KTD11 phase and throughout the snapshot interval, restart twice, and verify recovery lag is at most two seconds with neither version lost.
 - **Verification:** Pass V1-V6 with `src-tauri/tests/persistence_faults.rs` and `tests/e2e/autosave-recovery.spec.ts` green.

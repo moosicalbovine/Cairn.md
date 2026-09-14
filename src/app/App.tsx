@@ -72,7 +72,11 @@ export function App() {
         setBoot("ready");
       } catch (reason) {
         if (!active) return;
-        setError(reason instanceof Error ? reason.message : "The desktop core did not respond.");
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Cairn.md could not reach its desktop service. Restart the application.",
+        );
         setBoot("unavailable");
       }
     })();
@@ -102,8 +106,10 @@ export function App() {
     return (
       <main className="startup-screen">
         <span className="setup-mark" aria-hidden="true">C</span>
-        <h1>Open Cairn.md as a desktop app</h1>
-        <p>{error ?? "The local desktop core is unavailable."}</p>
+        <h1>Cairn.md could not connect to its desktop service</h1>
+        <p>
+          {error ?? "Close this window, then start or restart the installed Cairn.md Windows application."}
+        </p>
       </main>
     );
   }

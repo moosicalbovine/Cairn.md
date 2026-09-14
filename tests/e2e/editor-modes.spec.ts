@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { EditorSession } from "../../src/features/editor/session/EditorSession";
 
-// Deliberate U4 boundary: Tauri WebDriver infrastructure does not exist yet, so
-// this deterministic integration test exercises the real session and parser chain.
+// This deterministic integration test exercises the real session and parser chain
+// without launching the Windows desktop harness.
 describe("Visual and Source mode integration", () => {
   it("opens in Visual and repeated mode switches preserve the canonical bytes", () => {
     const original = new TextEncoder().encode(
