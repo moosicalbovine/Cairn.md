@@ -35,7 +35,9 @@ Operations spanning disk and SQLite use a journal with these phases:
 
 Startup replay advances an interrupted operation exactly once and removes only operation-owned artifacts whose identity and fingerprint match the journal.
 
-Imports copy to a same-directory temporary file, verify the source before and after copying, finalize without overwriting, and commit provenance only after the destination is durable. Saves hold a Windows handle that denies competing writers while permitting atomic replacement, use an operation-owned backup, verify the final hash, and only then advance metadata.
+Imports use a same-directory temporary file. The importer verifies the source before and after copying, finalizes without overwriting, and commits provenance only after the destination is durable.
+
+Saves hold a Windows handle that denies competing writers while permitting atomic replacement. Each save uses an operation-owned backup, verifies the final hash, and only then advances metadata.
 
 ## Editing and Markdown preservation
 

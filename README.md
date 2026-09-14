@@ -1,6 +1,6 @@
 # Cairn.md
 
-Cairn.md is a lightweight Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
+Cairn.md is a Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
 
 > [!IMPORTANT]
 > Cairn.md `v0.1.0` is an early MVP release. Its Windows installer is unsigned;
@@ -60,7 +60,7 @@ prerequisite is available.
 - **Local by default:** documents and application metadata remain on the user's PC.
 - **Portable Markdown:** Cairn.md never requires proprietary syntax inside `.md` files.
 - **Safe imports:** importing always creates an independent library copy and never edits the tracked original.
-- **Fast and dependable:** startup, typing, autosave, and recovery are treated as core product requirements.
+- **Measured performance:** release builds must meet the startup, input-latency, document-open, memory, and recovery thresholds in the [performance contract](docs/PERFORMANCE.md).
 - **Simple versioning:** Git powers local history without exposing developer-oriented workflows.
 
 ## Documentation

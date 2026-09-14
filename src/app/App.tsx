@@ -72,7 +72,7 @@ export function App() {
         setBoot("ready");
       } catch (reason) {
         if (!active) return;
-        setError(reason instanceof Error ? reason.message : "The desktop core did not respond.");
+        setError(reason instanceof Error ? reason.message : null);
         setBoot("unavailable");
       }
     })();
@@ -100,10 +100,11 @@ export function App() {
 
   if (boot === "unavailable" || snapshot === null) {
     return (
-      <main className="startup-screen">
+      <main className="startup-screen" aria-live="assertive" aria-atomic="true">
         <span className="setup-mark" aria-hidden="true">C</span>
-        <h1>Open Cairn.md as a desktop app</h1>
-        <p>{error ?? "The local desktop core is unavailable."}</p>
+        <h1>Cairn.md could not finish starting</h1>
+        <p>{error ?? "No diagnostic details were provided."}</p>
+        <p>Close this window, then start or restart the installed Cairn.md Windows application.</p>
       </main>
     );
   }

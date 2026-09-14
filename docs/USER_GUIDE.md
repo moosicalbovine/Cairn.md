@@ -170,4 +170,4 @@ Developer-oriented Git concepts such as staging, branches, remotes, pushing, pul
 
 ## Getting help
 
-Until a supported build is published, use this GitHub repository's issue tracker for product questions, workflow examples, documentation feedback, and accessibility concerns. Never attach confidential workplace documents or expose private file paths in a public issue.
+Use this GitHub repository's issue tracker for questions about the v0.1.0 prerelease, workflow examples, documentation feedback, and accessibility concerns. Never attach confidential workplace documents or expose private file paths in a public issue.
