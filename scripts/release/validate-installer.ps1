@@ -28,6 +28,9 @@ $ready = "$report.ready"
 New-Item -ItemType Directory -Force -Path $appData, $library, $tracked | Out-Null
 $trackedSource = Join-Path $tracked 'tracked-proof.md'
 Set-Content -LiteralPath $trackedSource -Value '# Original tracked file remains unchanged.' -NoNewline
+$upgradeProject = Join-Path $library 'Existing Project'
+$upgradeCanary = Join-Path $upgradeProject 'upgrade-canary.md'
+$upgradeCanaryContent = '# Existing library content survives the upgrade.'
 $applicationProcess = $null
 $uninstaller = $null
 $uninstallAttempted = $false
@@ -168,8 +171,8 @@ try {
         $previousEntry = Assert-InstalledVersion $PreviousVersion
         $previousInstallation = Resolve-InstalledApplication $previousEntry
         $uninstaller = $previousInstallation.Uninstaller
-        Invoke-InstalledWorkflow $previousInstallation.Application
-        Assert-WorkflowFiles | Out-Null
+        New-Item -ItemType Directory -Force -Path $upgradeProject | Out-Null
+        Set-Content -LiteralPath $upgradeCanary -Value $upgradeCanaryContent -NoNewline
     }
 
     Install-Cairn $resolvedInstaller "Installer"
@@ -177,6 +180,11 @@ try {
     $installation = Resolve-InstalledApplication $entry
     $application = $installation.Application
     $uninstaller = $installation.Uninstaller
+    if ($hasPreviousInstaller -and
+        (-not (Test-Path -LiteralPath $upgradeCanary) -or
+        (Get-Content -LiteralPath $upgradeCanary -Raw) -ne $upgradeCanaryContent)) {
+        throw "Upgrade from $PreviousVersion did not preserve the existing user library"
+    }
     Invoke-InstalledWorkflow $application
     $savedDocument = Assert-WorkflowFiles
 
@@ -194,6 +202,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $savedDocument)) {
         throw 'Uninstall removed user-owned library content'
+    }
+    if ($hasPreviousInstaller -and -not (Test-Path -LiteralPath $upgradeCanary)) {
+        throw 'Uninstall removed library content preserved by the upgrade'
     }
     if (Test-Path -LiteralPath $application.FullName) {
         throw 'The installed Cairn.md executable remains after uninstall'
