@@ -3,7 +3,7 @@
 Cairn.md is a Windows desktop application for collecting, organizing, reading, and editing Markdown files locally.
 
 > [!IMPORTANT]
-> Cairn.md `v0.1.0` is an early MVP release. Its Windows installer is unsigned;
+> Cairn.md `v0.1.1` is an early MVP release. Its Windows installer is unsigned;
 > verify the published SHA-256 checksum before running it.
 
 ## Why Cairn.md?
@@ -12,7 +12,7 @@ Markdown files increasingly arrive through email, Microsoft Teams, SharePoint fo
 
 Cairn.md provides a personal managed library that keeps Markdown files easy to find and work with while preserving clean, portable `.md` files.
 
-## v0.1.0 — MVP (current)
+## v0.1.1 — MVP (current)
 
 - Windows-first desktop experience
 - One user-selected, relocatable library folder
@@ -28,11 +28,11 @@ Cairn.md provides a personal managed library that keeps Markdown files easy to f
 ## Install on Windows
 
 Download the x64 `.exe` and matching `.sha256` file from the
-[v0.1.0 GitHub release](https://github.com/moosicalbovine/Cairn.md/releases/tag/v0.1.0).
+[v0.1.1 GitHub release](https://github.com/moosicalbovine/Cairn.md/releases/tag/v0.1.1).
 Verify the checksum, then run the current-user installer. Administrator
 credentials are not required.
 
-The unsigned v0.1.0 installer may trigger Microsoft Defender SmartScreen. If
+The unsigned v0.1.1 installer may trigger Microsoft Defender SmartScreen. If
 WebView2 is missing, its embedded Microsoft bootstrapper needs an internet
 connection during installation; Cairn.md itself works locally after that
 prerequisite is available.

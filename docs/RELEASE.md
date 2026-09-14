@@ -55,13 +55,13 @@ Complete this from a clean Windows sandbox before a stable release. A prerelease
 
 - [ ] Install for the current user without administrator credentials.
 - [ ] Launch with an existing Evergreen WebView2 runtime.
-- [ ] Launch on a Windows client snapshot without WebView2 and verify that the embedded bootstrapper installs it. The v0.1.0 prerelease has package-level proof; hosted execution is unavailable because GitHub's Windows Server image cannot remove WebView2.
+- [ ] Launch on a Windows client snapshot without WebView2 and verify that the embedded bootstrapper installs it. The v0.1.x prereleases have package-level proof; hosted execution is unavailable because GitHub's Windows Server image cannot remove WebView2.
 - [ ] Disconnect networking after prerequisites are installed and complete create, import, edit, autosave, recovery, and reconnect flows.
-- [ ] Upgrade from the previous released version and preserve library binding, provenance, and recovery metadata. Not applicable to v0.1.0, which has no predecessor.
+- [ ] Upgrade from the previous released version and preserve library binding, provenance, and recovery metadata. The automated installer check covers this when a previous release is supplied.
 - [ ] Attempt a downgrade and confirm it is blocked.
 - [ ] Uninstall and confirm the user-selected library folder and Markdown files remain untouched.
 - [ ] Reinstall and reconnect the retained library.
-- [ ] Verify the installer and installed executable signatures when signing is enabled. Not applicable to the explicitly unsigned v0.1.0 preview.
+- [ ] Verify the installer and installed executable signatures when signing is enabled. Not applicable to explicitly unsigned v0.1.x previews.
 
 ## Release gate
 
