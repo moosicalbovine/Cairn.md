@@ -133,7 +133,8 @@ function Invoke-InstalledWorkflow($application) {
     $workflow = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if ($workflow.benchmark -ne 'cairn-installed-workflow' -or $workflow.passed -ne $true) {
         $failedChecks = @($workflow.checks.psobject.Properties | Where-Object { $_.Value -ne $true } | ForEach-Object { $_.Name })
-        throw "Installed Cairn.md workflow failed: $($failedChecks -join ', ')"
+        $failureDetail = if ($workflow.message) { ": $($workflow.message)" } else { '' }
+        throw "Installed Cairn.md workflow failed ($($failedChecks -join ', '))$failureDetail"
     }
     $termination = Start-Process -FilePath 'taskkill.exe' `
         -ArgumentList '/PID', $script:applicationProcess.Id, '/T', '/F' `
