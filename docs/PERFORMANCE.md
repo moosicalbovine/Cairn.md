@@ -37,11 +37,23 @@ The two earlier tagged measurements are retained rather than discarded. [Attempt
 
 The tagged jobs repeatedly reported that Windows still held isolated WebView2 profiles after process-tree termination and the synchronous removal retries. The v0.1.1 release gate retained every measurement and accepted attempt 5 only because its complete 40-sample p95 passed. Post-release, the harness was hardened to wait up to 30 seconds for each profile to become removable and to fail if cleanup never completes, preventing deferred teardown from silently overlapping the next sample.
 
+The first post-release hardening run completed that strict cleanup for all 40
+samples, but still recorded a late hosted-runner slowdown: startup was 1,223.0
+ms p50, 1,704.1 ms p95, and 4,616.4 ms maximum. Document open passed at 218.4
+ms p95, input latency passed at 31.7 ms p95, and idle private working set passed
+at 75.4 MB. The complete failing report is retained in [run
+34979544899](https://github.com/moosicalbovine/Cairn.md/actions/runs/34979544899).
+Because repeated WebView2 launches can keep creating host-level antimalware work
+after the process tree has exited and its profile is removable, the harness now
+uses a five-second reset interval. This changes the synthetic launch cadence,
+not the 1.5-second requirement or the percentile calculation; every valid
+sample remains part of the gate.
+
 ### v0.1.0 hosted release evidence
 
 Commit `b381ae6` passed the release comparison in [GitHub Actions run 34600493682](https://github.com/moosicalbovine/Cairn.md/actions/runs/34600493682). The retained artifacts are `cairn-release-performance-b381ae6061351a2a04bc1db608ca7fa57e21f0d5` and `cairn-md-validated-installer-b381ae6061351a2a04bc1db608ca7fa57e21f0d5`.
 
-The runner used Windows Server 2025 Datacenter `10.0.26100`, WebView2 `152.0.4191.66`, four logical processors from an AMD EPYC 9V45 host, 16 GB RAM, and SSD storage. Each startup sample used an isolated app-data directory. The harness waited one second after terminating each complete WebView2 process tree so rapid test relaunches did not overlap Windows process and antimalware cleanup.
+The runner used Windows Server 2025 Datacenter `10.0.26100`, WebView2 `152.0.4191.66`, four logical processors from an AMD EPYC 9V45 host, 16 GB RAM, and SSD storage. Each startup sample used an isolated app-data directory. That release used a one-second reset interval; the current harness uses five seconds after strict profile cleanup because later hosted evidence showed that one second could still create synthetic rapid-relaunch host load.
 
 | Metric | p50 | p95 | Maximum | Result |
 |---|---:|---:|---:|---|
@@ -69,6 +81,7 @@ Each run uses isolated app metadata and never opens the user's library. The harn
 - stops the startup clock before gathering diagnostic process data;
 - closes the full process tree between startup samples;
 - waits for the isolated WebView2 profile to be removed, failing after a bounded timeout rather than measuring through deferred cleanup;
+- waits five seconds after cleanup so the next sample does not immediately recreate WebView2 and antimalware load;
 - records 20 real visual-editor opens and edits through the next painted frame; and
 - measures the sum of the process tree's private working sets after the idle interval.
 

@@ -50,7 +50,7 @@ type PerformanceProcess = Readonly<{
 }>;
 
 const pollIntervalMs = 50;
-const startupResetDelayMs = 1_000;
+const startupResetDelayMs = 5_000;
 const cleanupTimeoutMs = 30_000;
 const startupTimeoutMs = 60_000;
 const reportTimeoutMs = 120_000;
@@ -190,8 +190,9 @@ async function measureStartup(binaryPath: string, sample: number): Promise<Start
     };
   } finally {
     await stopPerformanceProcess(run);
-    // Rapid WebView2 process-tree relaunches can overlap Windows cleanup and
-    // antimalware work. Keep every sample, but let the host return to idle first.
+    // Repeated WebView2 launches are not representative of a human cold-start
+    // cadence and can create host-level antimalware work even after the isolated
+    // profile is removable. Keep every sample, but let the host settle first.
     await delay(startupResetDelayMs);
   }
 }
