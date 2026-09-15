@@ -53,7 +53,7 @@ CI retains ordinary unsigned installer artifacts for 14 days and release evidenc
 
 ## Performance evidence
 
-Dispatch the **Release performance** workflow or run the command in [PERFORMANCE.md](PERFORMANCE.md) on the reference machine. Retain raw JSON, environment details, and the exact commit. Every threshold must pass; do not replace a slow valid sample.
+Dispatch the **Release performance** workflow or run the command in [PERFORMANCE.md](PERFORMANCE.md) on the reference machine. Retain raw JSON, environment details, and the exact commit. Every threshold must pass; do not replace a slow valid sample. The harness must finish removing the isolated WebView2 profile before it starts the next sample; cleanup that remains locked beyond the bounded timeout fails the run instead of allowing overlapping teardown to contaminate later measurements.
 
 ## Installer validation checklist
 
